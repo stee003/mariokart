@@ -9,6 +9,7 @@ const KEYMAP = {
   right:    ['ArrowRight', 'KeyD'],
   drift:    ['ShiftLeft', 'ShiftRight'],
   trick:    ['Space'],
+  item:     ['KeyE', 'KeyF'],
   reset:    ['KeyR'],
   pause:    ['Escape'],
   confirm:  ['Enter'],
@@ -49,6 +50,7 @@ export class InputManager {
       steer: (this.isDown('left') ? -1 : 0) + (this.isDown('right') ? 1 : 0),
       drift: this.isDown('drift'),
       trick: this.wasPressed('trick'),
+      item: this.wasPressed('item'),
     };
   }
 

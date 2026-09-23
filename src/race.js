@@ -11,12 +11,14 @@ import { normalizeAngle } from './vehicle.js';
 const R = CONFIG.race;
 
 export class RaceManager {
-  constructor({ track, hud, audio, i18n, onEvent }) {
+  constructor({ track, hud, audio, i18n, onEvent, items = null }) {
     this.track = track;
     this.hud = hud;
     this.audio = audio;
     this.i18n = i18n;
     this.onEvent = onEvent;               // fx hook: (type, payload)
+    this.items = items;                   // optional ItemSystem (power-ups)
+    this.itemsEnabled = !!items;
 
     this.karts = [];                      // {vehicle, ai, nameKey, isPlayer, color}
     this.kartState = new Map();           // per-kart race data
@@ -30,6 +32,7 @@ export class RaceManager {
     this.finishTimer = 0;
     this.wrongWayTimer = 0;
     this.paused = false;
+    this.lapsOverride = null;   // modes (GP escalation, time trial) set this
   }
 
   registerKart(kart) {
@@ -39,7 +42,7 @@ export class RaceManager {
 
   _freshKartState() {
     return {
-      nextCp: 1, lap: 0, laps: R.laps,
+      nextCp: 1, lap: 0, laps: this.lapsOverride ?? R.laps,
       lapStart: 0, bestLap: null, lapTimes: [],
       prevProg: 0, finished: false, finishTime: null,
     };
@@ -59,6 +62,7 @@ export class RaceManager {
       kart.vehicle.place(grid[i]);
       this.kartState.set(kart.vehicle, this._freshKartState());
     });
+    if (this.itemsEnabled) this.items.reset();
     this.hud.onRaceStart();
   }
 
@@ -78,20 +82,33 @@ export class RaceManager {
     this.raceTime += dt;
 
     // inputs + physics -------------------------------------------------------
+    const racing2 = this.state === 'racing' || this.state === 'finished';
+    const order = this.itemsEnabled ? this.positions() : null;
     for (const kart of this.karts) {
+      if (order) {
+        kart._racePos = order.indexOf(kart) + 1;
+        kart._raceTotal = this.karts.length;
+        kart._raceLap = this.kartState.get(kart.vehicle).lap;
+      }
       let input;
       if (kart.isPlayer) {
         input = { ...this.playerInput };
       } else {
         // AI keeps driving during the slow-mo finish sequence
-        input = kart.ai.update(dt, this.karts, this.state === 'racing' || this.state === 'finished');
+        input = kart.ai.update(dt, this.karts, racing2, this.items);
       }
       kart.vehicle.step(dt, input, false);
       this._fxForKart(kart);
+
+      // item activation (player key or AI decision)
+      if (this.itemsEnabled && racing2 && input.item) {
+        this.items.useItem(kart, this.karts);
+      }
     }
 
     this._collideKarts();
     this._collideObstacles();
+    if (this.itemsEnabled && racing2) this.items.update(dt, this.karts, this.raceTime);
 
     if (this.state === 'racing') {
       for (const kart of this.karts) this._checkpoints(kart);
@@ -122,6 +139,7 @@ export class RaceManager {
       this.state = 'racing';
       this.hud.countdown(this.i18n.t('race.go'), true);
       this.audio.countBeep(true);
+      this.onEvent && this.onEvent('raceGo', {});
       // player rocket start
       const player = this.karts.find((k) => k.isPlayer);
       if (player && this.playerArmed && this.playerInput.throttle &&
@@ -131,7 +149,7 @@ export class RaceManager {
       }
       // AI rocket starts by personality
       for (const kart of this.karts) {
-        if (!kart.isPlayer && kart.ai && Math.random() < kart.ai.p.startBoostChance) {
+        if (!kart.isPlayer && kart.ai && Math.random() < kart.ai.dp.startBoostChance) {
           kart.vehicle.boost.trigger(0, 'start');
         }
       }
@@ -172,6 +190,7 @@ export class RaceManager {
       }
     }
     st.lap++;
+    this.onEvent && this.onEvent('lapComplete', { kart, lap: st.lap, lapTime });
     if (st.lap >= st.laps) {
       st.finished = true;
       st.finishTime = this.raceTime;
@@ -179,6 +198,7 @@ export class RaceManager {
     } else if (kart.isPlayer && st.lap === st.laps - 1) {
       this.hud.notify(this.i18n.t('race.finalLap'));
       this.audio.click();
+      this.onEvent && this.onEvent('playerFinalLap', {});
     }
   }
 
@@ -193,6 +213,7 @@ export class RaceManager {
       this.onEvent && this.onEvent('celebrate', {
         pos: kart.vehicle.pos.clone(), win: pos === 1,
       });
+      this.onEvent && this.onEvent('playerFinished', { pos });
     }
   }
 
@@ -202,6 +223,8 @@ export class RaceManager {
     for (let i = 0; i < this.karts.length; i++) {
       for (let j = i + 1; j < this.karts.length; j++) {
         const a = this.karts[i].vehicle, b = this.karts[j].vehicle;
+        // phased (intangible) karts pass through everything
+        if (this.itemsEnabled && (this.items.isIntangible(a) || this.items.isIntangible(b))) continue;
         const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
         const distSq = dx * dx + dz * dz;
         const minDist = CONFIG.vehicle.collisionRadius * 2;
@@ -216,9 +239,13 @@ export class RaceManager {
         const rvx = b.vel.x - a.vel.x, rvz = b.vel.z - a.vel.z;
         const relN = rvx * nx + rvz * nz;
         if (relN < 0) {
-          const jimp = -(1 + rest) * relN * 0.5;
-          a.vel.x -= nx * jimp; a.vel.z -= nz * jimp;
-          b.vel.x += nx * jimp; b.vel.z += nz * jimp;
+          // Mass-weighted impulse: with equal masses this is exactly the
+          // original even-split impulse from the vertical slice.
+          const ma = a.massFactor ?? 1, mb = b.massFactor ?? 1;
+          const invA = 1 / ma, invB = 1 / mb;
+          const jimp = -(1 + rest) * relN / (invA + invB);
+          a.vel.x -= nx * jimp * invA; a.vel.z -= nz * jimp * invA;
+          b.vel.x += nx * jimp * invB; b.vel.z += nz * jimp * invB;
           const strength = Math.min(2, Math.abs(relN) / 8);
           if (strength > 0.15) {
             this.audio.collision(strength);
@@ -250,10 +277,11 @@ export class RaceManager {
         v.pos.z = c.z + nz * minD;
         const relN = v.vel.x * -nx + v.vel.z * -nz;
         if (relN > 0) {
-          // moving into the obstacle: bounce
+          // moving into the obstacle: bounce (heavier karts shrug it off more)
           const rest = 0.55;
-          v.vel.x += nx * relN * (1 + rest);
-          v.vel.z += nz * relN * (1 + rest);
+          const massScale = 1 / (v.massFactor ?? 1);
+          v.vel.x += nx * relN * (1 + rest) * massScale;
+          v.vel.z += nz * relN * (1 + rest) * massScale;
         }
         this.audio.collision(1.2);
         this.onEvent && this.onEvent('obstacleHit', {

@@ -6,6 +6,132 @@
 
 import { CONFIG } from './config.js';
 import { formatTime } from './race.js';
+import { ITEMS } from './content/items.js';
+
+// Canvas-drawn original icons for every power-up (no fonts/assets needed).
+export function drawItemIcon(canvas, icon, color) {
+  const g = canvas.getContext('2d');
+  const s = canvas.width;
+  const c = `#${color.toString(16).padStart(6, '0')}`;
+  g.clearRect(0, 0, s, s);
+  g.save();
+  g.translate(s / 2, s / 2);
+  g.fillStyle = c; g.strokeStyle = c; g.lineWidth = s * 0.09; g.lineCap = 'round';
+  const r = s * 0.36;
+  switch (icon) {
+    case 'bolt':
+      g.beginPath(); g.moveTo(r * 0.3, -r); g.lineTo(-r * 0.5, r * 0.15); g.lineTo(0, r * 0.15);
+      g.lineTo(-r * 0.3, r); g.lineTo(r * 0.5, -r * 0.15); g.lineTo(0, -r * 0.15); g.closePath(); g.fill();
+      break;
+    case 'anchor':
+      g.beginPath(); g.arc(0, -r * 0.6, r * 0.28, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.moveTo(0, -r * 0.3); g.lineTo(0, r * 0.7); g.stroke();
+      g.beginPath(); g.arc(0, r * 0.3, r * 0.6, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke();
+      break;
+    case 'ghost':
+      g.beginPath(); g.arc(0, -r * 0.2, r * 0.6, Math.PI, 0); g.lineTo(r * 0.6, r * 0.7);
+      for (let i = 2; i >= -2; i--) g.lineTo(i * r * 0.3, r * (0.7 - (i % 2 === 0 ? 0 : -0.2)));
+      g.closePath(); g.fill();
+      break;
+    case 'ring':
+      g.beginPath(); g.arc(0, 0, r * 0.8, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.arc(0, 0, r * 0.35, 0, Math.PI * 2); g.stroke();
+      break;
+    case 'core':
+      g.beginPath(); g.arc(0, 0, r * 0.5, 0, Math.PI * 2); g.fill();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        g.beginPath(); g.moveTo(Math.cos(a) * r * 0.6, Math.sin(a) * r * 0.6);
+        g.lineTo(Math.cos(a) * r, Math.sin(a) * r); g.stroke();
+      }
+      break;
+    case 'spiral':
+      g.beginPath();
+      for (let a = 0; a < Math.PI * 4; a += 0.2) {
+        const rr = (a / (Math.PI * 4)) * r;
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        a === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.stroke();
+      break;
+    case 'shield':
+      g.beginPath(); g.moveTo(0, -r); g.lineTo(r * 0.8, -r * 0.5); g.lineTo(r * 0.7, r * 0.4);
+      g.lineTo(0, r); g.lineTo(-r * 0.7, r * 0.4); g.lineTo(-r * 0.8, -r * 0.5); g.closePath(); g.stroke();
+      break;
+    case 'hourglass':
+      g.beginPath(); g.moveTo(-r * 0.6, -r); g.lineTo(r * 0.6, -r); g.lineTo(0, 0); g.closePath(); g.fill();
+      g.beginPath(); g.moveTo(-r * 0.6, r); g.lineTo(r * 0.6, r); g.lineTo(0, 0); g.closePath(); g.stroke();
+      break;
+    case 'magnet':
+      g.beginPath(); g.arc(0, -r * 0.1, r * 0.65, Math.PI, 0); g.stroke();
+      g.fillRect(-r * 0.78, -r * 0.1, r * 0.28, r * 0.8);
+      g.fillRect(r * 0.5, -r * 0.1, r * 0.28, r * 0.8);
+      break;
+    case 'drone':
+      g.beginPath(); g.arc(0, 0, r * 0.35, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.moveTo(-r, -r * 0.6); g.lineTo(r, r * 0.6); g.moveTo(r, -r * 0.6); g.lineTo(-r, r * 0.6); g.stroke();
+      break;
+    case 'snare':
+      g.beginPath(); g.arc(0, -r * 0.2, r * 0.55, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.moveTo(0, r * 0.35); g.quadraticCurveTo(r * 0.4, r * 0.8, 0, r); g.stroke();
+      break;
+    case 'wall':
+      for (let i = -1; i <= 1; i++) g.fillRect(i * r * 0.62 - r * 0.14, -r * 0.8, r * 0.28, r * 1.6);
+      break;
+    case 'harpoon':
+      g.beginPath(); g.moveTo(-r * 0.8, r * 0.8); g.lineTo(r * 0.6, -r * 0.6); g.stroke();
+      g.beginPath(); g.moveTo(r * 0.7, -r * 0.7); g.lineTo(r * 0.2, -r * 0.75); g.lineTo(r * 0.75, -r * 0.2); g.closePath(); g.fill();
+      break;
+    case 'bloom':
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+        g.beginPath(); g.arc(Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5, r * 0.3, 0, Math.PI * 2); g.fill();
+      }
+      break;
+    case 'shard':
+      g.beginPath(); g.moveTo(0, -r); g.lineTo(r * 0.5, 0); g.lineTo(0, r); g.lineTo(-r * 0.5, 0); g.closePath(); g.fill();
+      break;
+    case 'lash':
+      g.beginPath(); g.moveTo(-r * 0.8, r * 0.6);
+      g.quadraticCurveTo(-r * 0.2, -r * 0.9, r * 0.3, -r * 0.2);
+      g.quadraticCurveTo(r * 0.9, r * 0.4, r * 0.6, -r * 0.8); g.stroke();
+      break;
+    case 'beacon':
+      g.beginPath(); g.moveTo(0, -r); g.lineTo(r * 0.5, r * 0.5); g.lineTo(-r * 0.5, r * 0.5); g.closePath(); g.fill();
+      g.beginPath(); g.arc(0, -r, r * 0.2, 0, Math.PI * 2); g.fill();
+      break;
+    case 'well':
+      g.beginPath(); g.arc(0, 0, r * 0.35, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.ellipse(0, 0, r, r * 0.4, 0.4, 0, Math.PI * 2); g.stroke();
+      break;
+    case 'cell':
+      g.fillRect(-r * 0.4, -r * 0.8, r * 0.8, r * 1.6);
+      g.fillRect(-r * 0.15, -r, r * 0.3, r * 0.2);
+      break;
+    case 'swarm':
+      for (let i = 0; i < 7; i++) {
+        const a = i * 2.4, rr = r * (0.3 + (i % 3) * 0.25);
+        g.beginPath(); g.arc(Math.cos(a) * rr, Math.sin(a) * rr, r * 0.14, 0, Math.PI * 2); g.fill();
+      }
+      break;
+    case 'veil':
+      g.beginPath();
+      for (let x = -r; x <= r; x += r / 4) g.lineTo(x, Math.sin(x * 0.12) * r * 0.35);
+      g.stroke();
+      g.beginPath();
+      for (let x = -r; x <= r; x += r / 4) g.lineTo(x, r * 0.6 + Math.sin(x * 0.12 + 1) * r * 0.3);
+      g.stroke();
+      break;
+    case 'siphon':
+      g.beginPath(); g.moveTo(-r * 0.8, -r * 0.5); g.lineTo(r * 0.2, -r * 0.2); g.stroke();
+      g.beginPath(); g.moveTo(-r * 0.8, r * 0.5); g.lineTo(r * 0.2, r * 0.2); g.stroke();
+      g.beginPath(); g.arc(r * 0.5, 0, r * 0.35, 0, Math.PI * 2); g.fill();
+      break;
+    default:
+      g.beginPath(); g.arc(0, 0, r * 0.7, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+}
 
 export class HUDManager {
   constructor(i18n) {
@@ -26,7 +152,11 @@ export class HUDManager {
       resultsHeadline: document.getElementById('results-headline'),
       resultsRows: document.getElementById('results-rows'),
       resultsStats: document.getElementById('results-stats'),
+      itemBox: document.getElementById('item-box'),
+      itemIcon: document.getElementById('item-icon'),
+      itemName: document.getElementById('item-name'),
     };
+    this._currentItem = null;
     this.notifyTimer = 0;
     this._lastPos = -1;
     this._lastLap = -1;
@@ -45,6 +175,7 @@ export class HUDManager {
     this.el.wrongway.textContent = this.i18n.t('race.wrongWay');
     this._lastPos = -1;
     this._lastLap = -1;
+    this._currentItem = null;   // force item slot re-render in new language
   }
 
   ordinal(p) { return this.i18n.t(`ordinal.${p}`) || `${p}`; }
@@ -133,6 +264,23 @@ export class HUDManager {
 
   setWrongWay(on) {
     this.el.wrongway.classList.toggle('hidden', !on);
+  }
+
+  // Held power-up slot -------------------------------------------------------
+  setItem(itemId) {
+    if (!this.el.itemBox) return;
+    if (!itemId) {
+      this._currentItem = null;
+      this.el.itemBox.classList.add('hidden');
+      return;
+    }
+    if (itemId === this._currentItem) return;
+    this._currentItem = itemId;
+    const def = ITEMS[itemId];
+    if (!def) { this.el.itemBox.classList.add('hidden'); return; }
+    this.el.itemBox.classList.remove('hidden');
+    drawItemIcon(this.el.itemIcon, def.icon, def.color);
+    this.el.itemName.textContent = this.i18n.t(def.nameKey);
   }
 
   // ------------------------------------------------------------------ results

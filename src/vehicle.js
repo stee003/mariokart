@@ -10,13 +10,15 @@ import { CONFIG } from './config.js';
 import { DriftSystem } from './drift.js';
 import { BoostSystem } from './boost.js';
 
-const V = CONFIG.vehicle;
-
 export class VehicleController {
-  constructor(track, isPlayer = false) {
+  // `params` overrides CONFIG.vehicle per-kart (stat-based loadouts);
+  // with no override the behaviour is byte-for-byte the original slice.
+  constructor(track, isPlayer = false, params = null, driftMods = null) {
     this.track = track;
     this.isPlayer = isPlayer;
-    this.drift = new DriftSystem();
+    this.params = params || CONFIG.vehicle;
+    this.driftMods = driftMods;                       // optional per-kart drift tuning
+    this.drift = new DriftSystem(driftMods);
     this.pendingFx = {};
     this.boost = new BoostSystem((level, source) => {
       this.pendingFx.boostStart = { level, source };
@@ -46,6 +48,7 @@ export class VehicleController {
     this.climbRate = 0;
     this.lastFallSpeed = 0;
 
+    this.mods = null;                      // per-frame item-system modifiers
     this.fx = {};                          // per-frame FX event flags
   }
 
@@ -98,6 +101,10 @@ export class VehicleController {
 
     if (locked) input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
 
+    // Item-system modifiers (null when items are disabled).
+    const mods = this.mods;
+    if (mods && mods.noDrift) input = { ...input, drift: false };
+
     // --- surface at previous position (used for drag/limits this frame) ---
     const prevSurf = this.surf || track.surface(this.pos, this.hint);
 
@@ -109,30 +116,30 @@ export class VehicleController {
     const b = this.boost.update(dt);
 
     // --- engine / brakes / reverse -----------------------------------
-    const maxEff = V.maxSpeed * b.speedMult;
+    const maxEff = this.params.maxSpeed * b.speedMult * (mods?.speedMult ?? 1);
     if (input.throttle > 0) {
-      const accel = V.accel * (b.active ? b.accelMult : 1);
+      const accel = this.params.accel * (b.active ? b.accelMult : 1) * (mods?.accelMult ?? 1);
       if (fSpeed < maxEff) fSpeed += accel * dt * Math.max(0.35, 1 - Math.max(0, fSpeed) / maxEff);
       else fSpeed -= (fSpeed - maxEff) * 2.2 * dt;           // soft overspeed decay
     } else if (input.brake > 0) {
-      if (fSpeed > 0.4) fSpeed -= V.braking * dt;
-      else fSpeed = Math.max(-V.reverseMax, fSpeed - V.reverseAccel * dt);
+      if (fSpeed > 0.4) fSpeed -= this.params.braking * dt;
+      else fSpeed = Math.max(-this.params.reverseMax, fSpeed - this.params.reverseAccel * dt);
     } else {
       const s = Math.sign(fSpeed);
-      fSpeed -= s * Math.min(Math.abs(fSpeed), V.coastDrag * dt);
+      fSpeed -= s * Math.min(Math.abs(fSpeed), this.params.coastDrag * dt);
     }
-    fSpeed -= fSpeed * V.drag * dt;
+    fSpeed -= fSpeed * this.params.drag * dt;
 
     // --- off-road penalty ------------------------------------------------
     const onRoad = prevSurf.onRoad, onShoulder = prevSurf.onShoulder;
     if (!onRoad) {
-      const cap = V.offTrackMaxSpeed;
+      const cap = this.params.offTrackMaxSpeed;
       if (fSpeed > cap) fSpeed -= (fSpeed - cap) * 3.0 * dt;
-      fSpeed *= Math.exp(-V.offTrackDrag * (onShoulder ? 0.25 : 1) * dt);
+      fSpeed *= Math.exp(-this.params.offTrackDrag * (onShoulder ? 0.25 : 1) * dt);
     }
 
     // --- steering ---------------------------------------------------------
-    this.steer += (input.steer - this.steer) * Math.min(1, V.steerSmoothing * dt);
+    this.steer += (input.steer - this.steer) * Math.min(1, this.params.steerSmoothing * dt);
 
     // --- drift state machine ---------------------------------------------
     const dEv = this.drift.update(dt, {
@@ -159,30 +166,41 @@ export class VehicleController {
     const speedAbs = Math.abs(fSpeed);
     let yawRate = 0;
     if (this.grounded) {
-      const speedFactor = Math.min(1, speedAbs / V.steerRefSpeed);
-      const highDamp = 1 - V.steerHighSpeedDamp *
-        Math.min(1, Math.max(0, (speedAbs - V.steerRefSpeed) / (V.maxSpeed - V.steerRefSpeed)));
+      const speedFactor = Math.min(1, speedAbs / this.params.steerRefSpeed);
+      const highDamp = 1 - this.params.steerHighSpeedDamp *
+        Math.min(1, Math.max(0, (speedAbs - this.params.steerRefSpeed) / (this.params.maxSpeed - this.params.steerRefSpeed)));
       const dirSign = fSpeed >= -0.5 ? 1 : -1;
-      let steerAuth = drifting ? CONFIG.drift.steerMult : 1;
+      let steerAuth = drifting ? (this.driftMods?.steerMult ?? CONFIG.drift.steerMult) : 1;
       if (b.active) steerAuth *= CONFIG.boost.steerRetention;
-      yawRate = this.steer * V.steerRate * speedFactor * highDamp * steerAuth * dirSign;
+      yawRate = this.steer * this.params.steerRate * speedFactor * highDamp * steerAuth * dirSign;
+      if (mods) {
+        yawRate *= mods.steerMult ?? 1;
+        if (mods.jitter) yawRate += (Math.random() - 0.5) * mods.jitter * 6;
+      }
       if (drifting) {
         yawRate += this.drift.dir * CONFIG.drift.driftStrength * Math.min(1, speedAbs / 16);
       }
     } else {
-      yawRate = this.steer * V.steerRate * CONFIG.air.airSteer;
+      yawRate = this.steer * this.params.steerRate * CONFIG.air.airSteer;
     }
     this.yaw += yawRate * dt;
 
     // --- lateral grip -------------------------------------------------------
-    let grip = onRoad ? V.traction : V.offTrackTraction;
-    if (drifting) grip *= CONFIG.drift.gripMult;
+    let grip = onRoad ? this.params.traction : this.params.offTrackTraction;
+    if (mods?.gripMult) grip *= mods.gripMult;
+    if (drifting) grip *= this.driftMods?.gripMult ?? CONFIG.drift.gripMult;
+    const zoneFx = prevSurf.fx;
+    if (zoneFx && zoneFx.gripMult !== 1) grip *= zoneFx.gripMult;   // slippery track zones
     latSpeed *= Math.exp(-grip * dt);
 
     // --- integrate horizontal ----------------------------------------------
     const nf = this.forward(_fwd);   // yaw may have changed
     const nr = this.right(_right);
     this.vel.copy(nf).multiplyScalar(fSpeed).addScaledVector(nr, latSpeed);
+    if (zoneFx) {
+      if (zoneFx.wind) this.vel.addScaledVector(prevSurf.right, zoneFx.wind * dt);  // crosswind zones
+      if (zoneFx.push) this.vel.addScaledVector(prevSurf.dir, zoneFx.push * dt);    // currents / conveyors
+    }
     this.pos.addScaledVector(this.vel, dt);
     this.fSpeed = fSpeed;
     this.latSpeed = latSpeed;
@@ -215,7 +233,7 @@ export class VehicleController {
       this.onRamp = surf.onRamp;
     } else {
       this.airTime += dt;
-      this.vy -= CONFIG.air.gravity * dt;
+      this.vy -= CONFIG.air.gravity * dt * (surf.fx?.gravMult ?? 1);   // low-gravity zones
       this.y += this.vy * dt;
 
       // aerial trick
@@ -282,6 +300,7 @@ export class VehicleController {
   }
 
   // Convenience for HUD/AI
+  get massFactor() { return this.params.massFactor ?? 1; }
   get speed() { return this.fSpeed; }
   get speedAbs() { return Math.abs(this.fSpeed); }
   get speedKmh() { return Math.abs(this.fSpeed) * 3.6; }

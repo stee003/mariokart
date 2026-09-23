@@ -4,7 +4,9 @@
 // Supports {placeholder} interpolation.
 // ============================================================================
 
-export const STRINGS = {
+import { CONTENT_STRINGS } from './content/strings.js';
+
+const BASE_STRINGS = {
   'game.title':        { en: 'Sunforge Racers',                     it: 'Sunforge Racers' },
   'game.subtitle':     { en: 'Desert Canyon Grand Prix',            it: 'Gran Premio del Canyon del Deserto' },
   'game.pilot':        { en: 'Pilot: Ember the Dustfox',            it: 'Pilota: Ember la Volpe delle Sabbie' },
@@ -15,6 +17,7 @@ export const STRINGS = {
   'menu.restart':      { en: 'Restart',                             it: 'Ricomincia' },
   'menu.main':         { en: 'Main Menu',                           it: 'Menu principale' },
   'menu.resume':       { en: 'Resume',                              it: 'Riprendi' },
+  'menu.mode':         { en: 'Choose Game Mode',                    it: 'Scegli la modalità' },
   'menu.press':        { en: 'An original arcade kart prototype',   it: 'Un prototipo arcade di kart originale' },
 
   'settings.title':    { en: 'Settings',                            it: 'Impostazioni' },
@@ -22,6 +25,10 @@ export const STRINGS = {
   'settings.camDist':  { en: 'Camera distance',                     it: 'Distanza telecamera' },
   'settings.camHeight':{ en: 'Camera height',                       it: 'Altezza telecamera' },
   'settings.volume':   { en: 'Volume',                              it: 'Volume' },
+  'settings.music':    { en: 'Music volume',                        it: 'Volume musica' },
+  'settings.difficulty': { en: 'AI difficulty',                     it: 'Difficoltà IA' },
+  'settings.laps':     { en: 'Quick race laps',                     it: 'Giri gara rapida' },
+  'settings.rivals':   { en: 'Rivals',                              it: 'Avversari' },
   'settings.back':     { en: 'Back',                                it: 'Indietro' },
 
   'controls.help':     { en: 'WASD / Arrows drive · SHIFT drift · SPACE aerial trick · R reset · ESC pause',
@@ -67,6 +74,10 @@ export const STRINGS = {
   'error.webgl':       { en: 'WebGL is not available in this browser.',
                          it: 'WebGL non è disponibile in questo browser.' },
 };
+
+// Content-owned strings (characters, parts, items...) merged on top so
+// content files keep their own EN/IT next to their data.
+export const STRINGS = { ...BASE_STRINGS, ...CONTENT_STRINGS };
 
 export class LocalizationManager {
   constructor(saveManager) {

@@ -10,7 +10,9 @@ const D = CONFIG.drift;
 export const DRIFT_COLORS = [0xcfd6df, 0x3fd2d8, 0xffb830, 0xff5df1];
 
 export class DriftSystem {
-  constructor() {
+  // Optional per-kart mods {chargeRate, gripMult, steerMult} from loadouts.
+  constructor(mods = null) {
+    this.mods = mods;
     this.state = 'idle';      // idle | drifting
     this.dir = 1;             // locked drift direction
     this.charge = 0;          // accumulated boost charge
@@ -62,7 +64,7 @@ export class DriftSystem {
       return ev;
     }
 
-    this.charge += D.chargeRate * dt;
+    this.charge += (this.mods?.chargeRate ?? D.chargeRate) * dt;
     let newLevel = 0;
     for (let i = 0; i < D.levels.length; i++) if (this.charge >= D.levels[i]) newLevel = i + 1;
     if (newLevel !== this.level) {

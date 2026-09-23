@@ -145,6 +145,38 @@ export class AudioManager {
     this._tone({ type: 'sine', f0: 1080, peak: 0.06, decay: 0.3 });
   }
   reset()        { this._tone({ type: 'sine', f0: 300, f1: 120, peak: 0.08, decay: 0.25 }); }
+
+  // ---- power-up sounds (all synthesized, unique per item) -------------------
+  itemSound(id) {
+    switch (id) {
+      case 'get':       this._tone({ type: 'triangle', f0: 620, f1: 940, peak: 0.09, decay: 0.12 }); break;
+      case 'roulette':  this._tone({ type: 'square', f0: 480, peak: 0.05, decay: 0.05 }); break;
+      case 'flux':      this._tone({ type: 'sawtooth', f0: 900, f1: 220, peak: 0.12, decay: 0.3 }); break;
+      case 'anchor':    this._tone({ type: 'sine', f0: 420, f1: 90, peak: 0.13, decay: 0.4 }); break;
+      case 'mirage':    this._tone({ type: 'sine', f0: 700, f1: 1400, peak: 0.08, decay: 0.35 }); break;
+      case 'pulse':     this._noiseBurst({ peak: 0.12, decay: 0.35, freq: 2400, type: 'bandpass', q: 2 });
+                        this._tone({ type: 'sine', f0: 880, f1: 440, peak: 0.09, decay: 0.3 }); break;
+      case 'overdrive': this._tone({ type: 'sawtooth', f0: 200, f1: 720, peak: 0.13, decay: 0.4 }); break;
+      case 'vortex':    this._tone({ type: 'square', f0: 300, f1: 60, peak: 0.14, decay: 0.45 }); break;
+      case 'phase':     this._tone({ type: 'sine', f0: 1200, f1: 1800, peak: 0.07, decay: 0.3 }); break;
+      case 'ripple':    this._tone({ type: 'sine', f0: 500, f1: 250, peak: 0.1, decay: 0.5 }); break;
+      case 'magnet':    this._tone({ type: 'square', f0: 240, f1: 480, peak: 0.1, decay: 0.25 }); break;
+      case 'repair':    this._tone({ type: 'triangle', f0: 520, f1: 780, peak: 0.09, decay: 0.28 }); break;
+      case 'snare':     this._noiseBurst({ peak: 0.12, decay: 0.2, freq: 900, type: 'bandpass', q: 1.5 }); break;
+      case 'prism':     this._tone({ type: 'triangle', f0: 1500, f1: 900, peak: 0.08, decay: 0.3 }); break;
+      case 'harpoon':   this._tone({ type: 'sawtooth', f0: 500, f1: 1100, peak: 0.11, decay: 0.22 }); break;
+      case 'bloom':     this._tone({ type: 'square', f0: 660, f1: 330, peak: 0.1, decay: 0.3 }); break;
+      case 'chrono':    this._tone({ type: 'sine', f0: 1046, f1: 523, peak: 0.09, decay: 0.4 }); break;
+      case 'lash':      this._noiseBurst({ peak: 0.14, decay: 0.16, freq: 3200, type: 'highpass' }); break;
+      case 'beacon':    this._tone({ type: 'square', f0: 880, peak: 0.08, decay: 0.15 }); break;
+      case 'well':      this._tone({ type: 'sine', f0: 180, f1: 60, peak: 0.13, decay: 0.5 }); break;
+      case 'tempest':   this._noiseBurst({ peak: 0.13, decay: 0.3, freq: 1800, type: 'bandpass', q: 3 }); break;
+      case 'swarm':     this._noiseBurst({ peak: 0.07, decay: 0.4, freq: 1400, type: 'bandpass', q: 4 }); break;
+      case 'aurora':    this._tone({ type: 'sine', f0: 760, f1: 1520, peak: 0.07, decay: 0.45 }); break;
+      case 'siphon':    this._tone({ type: 'sawtooth', f0: 700, f1: 140, peak: 0.11, decay: 0.4 }); break;
+      default:          this._tone({ type: 'square', f0: 600, peak: 0.08, decay: 0.15 }); break;
+    }
+  }
   finish(win) {
     if (!this.ready) return;
     const notes = win ? [523, 659, 784, 1046] : [392, 494, 587];

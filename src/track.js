@@ -1,31 +1,21 @@
 // ============================================================================
-// TrackManager - "Sunforge Circuit": an original desert-canyon loop.
-// Builds the centerline spline, road samples, ramps, boost pads, moving
-// obstacles, checkpoints, a shortcut and the AI racing line.
-// All gameplay queries (ground height, on-road tests, progress) live here.
+// TrackManager - data-driven track builder.
+//
+// `new TrackManager()` with no argument builds SUNFORGE_DEF exactly as the
+// original vertical slice (same samples, features, racing line). Any def
+// from src/content/trackDefs.js builds a different track through the same
+// code path. All gameplay queries (ground height, on-road tests, progress,
+// racing line) live here.
+//
+// Feature support: ramps, boost pads, one optional shortcut, ordered
+// checkpoints, item-box rows, themed render ranges, zone effects
+// (wind / low gravity / slippery / current) and moving obstacles
+// (gear, slider, pendulum, flamejet).
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
-
-// Control points of the closed loop: x, elevation y, z, road width w.
-const CONTROL_POINTS = [
-  { x: -202, y: 0,    z: -162, w: 26 },  // 0  start/finish straight (wide intro)
-  { x: -27,  y: 0,    z: -162, w: 26 },  // 1
-  { x: 105,  y: 0,    z: -157, w: 22 },  // 2
-  { x: 205,  y: 1.5,  z: -140, w: 17 },  // 3  approach to the drift corner
-  { x: 267,  y: 3,    z: -84,  w: 15 },  // 4  drifting corner apex (tight)
-  { x: 224,  y: 5.5,  z: 11,   w: 15 },  // 5  east straight, ramp zone
-  { x: 178,  y: 9.5,  z: 186,  w: 14 },  // 6  climb to the bridge
-  { x: 81,   y: 12,   z: 251,  w: 13 },  // 7  bridge deck over the gap
-  { x: -41,  y: 11.5, z: 273,  w: 13 },  // 8  north straight, tunnel ahead
-  { x: -162, y: 8.5,  z: 259,  w: 12 },  // 9
-  { x: -232, y: 5.5,  z: 200,  w: 11.5 },// 10 narrow canyon entrance
-  { x: -259, y: 3.5,  z: 105,  w: 11 },  // 11 canyon chicane (shortcut splits)
-  { x: -230, y: 2.5,  z: 14,   w: 11 },  // 12 chicane bulge
-  { x: -273, y: 1.5,  z: -73,  w: 12 },  // 13 canyon exit (shortcut rejoins)
-  { x: -267, y: 0.5,  z: -140, w: 18 },  // 14 large final sweeper
-];
+import { SUNFORGE_DEF } from './content/trackDefs.js';
 
 // 1D Catmull-Rom interpolation used for road width.
 function catmull1(p0, p1, p2, p3, t) {
@@ -38,17 +28,23 @@ function catmull1(p0, p1, p2, p3, t) {
 const UP = new THREE.Vector3(0, 1, 0);
 
 export class TrackManager {
-  constructor() {
+  constructor(def = SUNFORGE_DEF) {
+    this.def = def;
     this.step = 1.5;
     this.samples = [];
+    this.time = 0;
     this._buildCenterline();
     this._buildShortcut();
     this._buildFeatures();
     this._buildRacingLine();
   }
 
+  get id() { return this.def.id; }
+  get laps() { return this.def.laps ?? CONFIG.race.laps; }
+
   // ------------------------------------------------------------------ spline
   _buildCenterline() {
+    const CONTROL_POINTS = this.def.points;
     const pts = CONTROL_POINTS.map((p) => new THREE.Vector3(p.x, p.y, p.z));
     this.curve = new THREE.CatmullRomCurve3(pts, true, 'catmullrom', 0.5);
     this.L = this.curve.getLength();
@@ -83,11 +79,13 @@ export class TrackManager {
 
   // --------------------------------------------------------------- shortcut
   _buildShortcut() {
-    const entryProg = this.L * 0.805;
-    const exitProg = this.L * 0.885;
+    const sc = this.def.shortcut;
+    if (!sc) { this.shortcut = null; return; }
+    const entryProg = this.L * sc.entry;
+    const exitProg = this.L * sc.exit;
     const a = this.pointAt(entryProg), b = this.pointAt(exitProg);
-    const entry = a.pos.clone().addScaledVector(a.right, 3.4);
-    const exit = b.pos.clone().addScaledVector(b.right, 4.6);
+    const entry = a.pos.clone().addScaledVector(a.right, sc.latEntry);
+    const exit = b.pos.clone().addScaledVector(b.right, sc.latExit);
     entry.y = a.pos.y; exit.y = b.pos.y;
 
     const samples = [];
@@ -101,68 +99,103 @@ export class TrackManager {
       // keep the chute flush with the surrounding terrain
       const near = this.pointAt(entryProg + (exitProg - entryProg) * t);
       pos.y = near.pos.y - 0.15;
-      samples.push({ pos, dir: dir.clone(), right: right.clone(), s: t * len, width: 7.2 });
+      samples.push({ pos, dir: dir.clone(), right: right.clone(), s: t * len, width: sc.halfW * 2 });
     }
-    this.shortcut = { samples, entryProg, exitProg, halfW: 3.6, len };
+    this.shortcut = { samples, entryProg, exitProg, halfW: sc.halfW, len };
   }
 
   // ---------------------------------------------------------------- features
   _buildFeatures() {
     const L = this.L;
+    const def = this.def;
+
     // Ramps: {s0, s1, lat, halfW, rise}. Surface climbs from road to lip.
-    this.ramps = [
-      this._mkRamp(0.40 * L, 14, 0, 4.2, 2.6),      // east straight, onto the bridge
-      this._mkRamp(0.59 * L, 10, 0, 4.0, 1.8),      // end of the bridge deck hop
-      this._mkRamp(0.058 * L, 9, -3.5, 3.5, 1.4),   // small kicker after the start
-    ];
+    this.ramps = (def.ramps || []).map((r) => this._mkRamp(r.f * L, r.len, r.lat, r.halfW, r.rise));
 
     // Boost pads: {s, lat, halfW, len}
-    this.pads = [
-      { s: 0.13 * L, lat: 3, halfW: 2.3, len: 5 },
-      { s: 0.13 * L, lat: -3, halfW: 2.3, len: 5 },
-      { s: 0.375 * L, lat: 0, halfW: 2.6, len: 5 },
-      { s: 0.555 * L, lat: 0, halfW: 2.6, len: 5 },
-      { s: 0.935 * L, lat: 0, halfW: 2.6, len: 5 },
-    ];
+    this.pads = (def.pads || []).map((p) => ({
+      s: p.f * L, lat: p.lat, halfW: p.halfW ?? 2.6, len: p.len ?? 5,
+    }));
     // pads inside the shortcut
-    const sc = this.shortcut;
-    for (const f of [0.35, 0.72]) {
-      const idx = Math.min(sc.samples.length - 1, Math.floor(f * sc.samples.length));
-      const sm = sc.samples[idx];
-      this.pads.push({ s: sm.pos.x, lat: 0, halfW: 2.6, len: 4.5, shortcut: true, scFrac: f });
+    if (this.shortcut && def.shortcutPads) {
+      for (const f of def.shortcutPads) {
+        this.pads.push({ s: 0, lat: 0, halfW: 2.6, len: 4.5, shortcut: true, scFrac: f });
+      }
+    } else if (this.shortcut && def.id === 'sunforge_circuit') {
+      // legacy Sunforge shortcut pads (kept bit-identical)
+      for (const f of [0.35, 0.72]) {
+        this.pads.push({ s: 0, lat: 0, halfW: 2.6, len: 4.5, shortcut: true, scFrac: f });
+      }
     }
 
     // Checkpoints in strict order; index 0 is the start/finish line.
-    this.checkpoints = [0, 0.10, 0.355, 0.385, 0.53, 0.625, 0.712, 0.765, 0.905, 0.965]
-      .map((f, idx) => {
-        const p = this.pointAt(f * L);
-        const halfW = idx === 0 ? p.width / 2 + 6
-          : idx === 8 ? p.width / 2 + 14   // must also cover the shortcut exit
-          : p.width / 2 + 7;
-        return { s: f * L, halfW, idx };
-      });
+    this.checkpoints = def.checkpoints.map((f, idx) => {
+      const p = this.pointAt(f * L);
+      const extra = def.cpExtras?.[idx] ?? 7;
+      return { s: f * L, halfW: p.width / 2 + extra, idx };
+    });
 
-    // Decorative / collision ranges (used by environment + camera)
-    this.tunnelRange = [0.657 * L, 0.705 * L];
-    this.bridgeRange = [0.48 * L, 0.585 * L];
-    this.canyonRange = [0.72 * L, 0.915 * L];
+    // Themed render ranges (fractions of L in the def -> arc length here,
+    // exactly as the original slice stored them for the environment/camera)
+    const toLen = (r) => (r ? [r[0] * L, r[1] * L] : null);
+    this.tunnelRange = toLen(def.ranges?.tunnel);
+    this.bridgeRange = toLen(def.ranges?.bridge);
+    this.canyonRange = toLen(def.ranges?.canyon);
 
-    // Moving obstacles -------------------------------------------------
-    const gearAt = this.pointAt(0.84 * L);
-    this.gear = {
-      center: gearAt.pos.clone().addScaledVector(gearAt.right, 2.0),
-      armRadius: 6.4, angle: 0, speed: 0.85,
-    };
-    this.gear.center.y = gearAt.pos.y;
+    // Item box rows
+    this.itemBoxes = [];
+    for (const f of def.boxes || []) {
+      for (const lat of [-4, 0, 4]) this.itemBoxes.push({ s: f * L, lat });
+    }
 
-    const sliderAt = this.pointAt(0.645 * L);
-    this.slider = {
-      base: sliderAt.pos.clone(), right: sliderAt.right.clone(),
-      amp: sliderAt.width / 2 + 0.8, phase: 0, speed: 2.2, radius: 1.6,
-      pos: sliderAt.pos.clone(),
-    };
-    this.slider.pos.y = sliderAt.pos.y + 1.0;
-    this.baseY = sliderAt.pos.y;
+    // Zones (wind / low gravity / slippery / current)
+    this.zones = (def.zones || []).map((z) => ({
+      s0: z.f0 * L, s1: z.f1 * L, type: z.type, v: z.v,
+    }));
+
+    // Moving obstacles ---------------------------------------------------
+    this.obstacles = [];
+    this.gear = null;      // legacy accessors (first of each type)
+    this.slider = null;
+    for (const o of def.obstacles || []) {
+      const at = this.pointAt(o.s * L);
+      if (o.type === 'gear') {
+        const center = at.pos.clone().addScaledVector(at.right, o.lat ?? 0);
+        center.y = at.pos.y;
+        const gear = { type: 'gear', center, armRadius: o.armRadius, angle: 0, speed: o.speed };
+        this.obstacles.push(gear);
+        if (!this.gear) this.gear = gear;
+      } else if (o.type === 'slider') {
+        const slider = {
+          type: 'slider',
+          base: at.pos.clone(), right: at.right.clone(),
+          amp: at.width / 2 + (o.ampExtra ?? 0.8), phase: o.phase ?? 0, speed: o.speed, radius: o.radius,
+          pos: at.pos.clone(),
+        };
+        slider.pos.y = at.pos.y + 1.0;
+        slider.baseY = at.pos.y;
+        this.obstacles.push(slider);
+        if (!this.slider) { this.slider = slider; this.baseY = at.pos.y; }
+      } else if (o.type === 'pendulum') {
+        const pend = {
+          type: 'pendulum',
+          base: at.pos.clone(), right: at.right.clone(),
+          swing: o.swing, speed: o.speed, phase: o.phase ?? 0, radius: o.radius,
+          pos: at.pos.clone(),
+        };
+        pend.pos.y = at.pos.y + 0.8;
+        pend.baseY = at.pos.y;
+        this.obstacles.push(pend);
+      } else if (o.type === 'flamejet') {
+        const jet = {
+          type: 'flamejet',
+          pos: at.pos.clone(), period: o.period, duty: o.duty, radius: o.radius,
+          active: false,
+        };
+        jet.pos.y = at.pos.y;
+        this.obstacles.push(jet);
+      }
+    }
   }
 
   _mkRamp(s0, len, lat, halfW, rise) {
@@ -171,32 +204,58 @@ export class TrackManager {
   }
 
   update(dt, time) {
-    this.gear.angle += this.gear.speed * dt;
-    const t = this.slider;
-    t.phase += t.speed * dt;
-    const off = Math.sin(t.phase) * t.amp;
-    t.pos.copy(t.base).addScaledVector(t.right, off);
-    t.pos.y = this.baseY + 1.0;
+    this.time = time;
+    for (const o of this.obstacles) {
+      if (o.type === 'gear') {
+        o.angle += o.speed * dt;
+      } else if (o.type === 'slider') {
+        o.phase += o.speed * dt;
+        const off = Math.sin(o.phase) * o.amp;
+        o.pos.copy(o.base).addScaledVector(o.right, off);
+        o.pos.y = o.baseY + 1.0;
+      } else if (o.type === 'pendulum') {
+        const off = Math.sin(time * o.speed + o.phase) * o.swing;
+        o.pos.copy(o.base).addScaledVector(o.right, off);
+        o.pos.y = o.baseY + 0.8;
+      } else if (o.type === 'flamejet') {
+        o.active = (time % o.period) < o.period * o.duty;
+      }
+    }
   }
 
   // Circular colliders for the moving obstacles this frame.
   getObstacleColliders() {
-    const g = this.gear, out = [];
-    for (let k = 1; k <= 2; k++) {
-      const r = (g.armRadius * k) / 2;
-      out.push({
-        x: g.center.x + Math.cos(g.angle) * r,
-        z: g.center.z + Math.sin(g.angle) * r,
-        r: k === 2 ? 1.5 : 1.2, hit: 'gear',
-      });
-      out.push({
-        x: g.center.x - Math.cos(g.angle) * r,
-        z: g.center.z - Math.sin(g.angle) * r,
-        r: k === 2 ? 1.5 : 1.2, hit: 'gear',
-      });
+    const out = [];
+    for (const o of this.obstacles) {
+      if (o.type === 'gear') {
+        for (let k = 1; k <= 2; k++) {
+          const r = (o.armRadius * k) / 2;
+          out.push({ x: o.center.x + Math.cos(o.angle) * r, z: o.center.z + Math.sin(o.angle) * r, r: k === 2 ? 1.5 : 1.2, hit: 'gear' });
+          out.push({ x: o.center.x - Math.cos(o.angle) * r, z: o.center.z - Math.sin(o.angle) * r, r: k === 2 ? 1.5 : 1.2, hit: 'gear' });
+        }
+      } else if (o.type === 'slider' || o.type === 'pendulum') {
+        out.push({ x: o.pos.x, z: o.pos.z, r: o.radius, hit: o.type });
+      } else if (o.type === 'flamejet' && o.active) {
+        out.push({ x: o.pos.x, z: o.pos.z, r: o.radius, hit: 'flame' });
+      }
     }
-    out.push({ x: this.slider.pos.x, z: this.slider.pos.z, r: this.slider.radius, hit: 'slider' });
     return out;
+  }
+
+  // ------------------------------------------------------------------ zones
+  _zoneFxAt(progress) {
+    const fx = { wind: 0, gravMult: 1, gripMult: 1, push: 0 };
+    for (const z of this.zones) {
+      let rel = progress - z.s0;
+      if (rel < -this.L / 2) rel += this.L;
+      if (rel > this.L / 2) rel -= this.L;
+      if (rel < 0 || rel > z.s1 - z.s0) continue;
+      if (z.type === 'wind') fx.wind += z.v;
+      else if (z.type === 'lowgrav') fx.gravMult = Math.min(fx.gravMult, z.v);
+      else if (z.type === 'slippery') fx.gripMult = Math.min(fx.gripMult, z.v);
+      else if (z.type === 'current') fx.push += z.v;
+    }
+    return fx;
   }
 
   // ----------------------------------------------------------------- queries
@@ -246,8 +305,8 @@ export class TrackManager {
     return { idx: best, along: bestAlong, lat: bestLat };
   }
 
-  // Full surface query: main loop + shortcut + ramps.
-  // Returns progress, lateral, ground y, direction, road state.
+  // Full surface query: main loop + shortcut + ramps + zones.
+  // Returns progress, lateral, ground y, direction, road state, zone fx.
   surface(pos, hint = { main: -1, sc: -1 }) {
     const main = this._nearest(pos, this.samples, hint.main, 24);
     hint.main = main.idx;
@@ -258,20 +317,19 @@ export class TrackManager {
     if (this.shortcut) {
       sc = this._nearest(pos, this.shortcut.samples, hint.sc, 24);
       hint.sc = sc.idx;
-      const scS = this.shortcut.samples[sc.idx];
-      const mainW = sm.width / 2 + 4;
       const scW = this.shortcut.halfW + 4;
+      const mainW = sm.width / 2 + 4;
       if (Math.abs(sc.lat) < Math.min(Math.abs(main.lat), scW) && Math.abs(sc.lat) < mainW) {
         if (Math.abs(sc.lat) < Math.abs(main.lat)) useShortcut = true;
       }
     }
 
-    let progress, lateral, dir, width, y, onRoad, onShoulder;
+    let progress, lateral, dir, right, width, y, onRoad, onShoulder;
     if (useShortcut) {
       const scS = this.shortcut.samples[sc.idx];
       const frac = Math.min(1, Math.max(0, (sc.idx * this.step + sc.along) / this.shortcut.len));
       progress = this.shortcut.entryProg + frac * (this.shortcut.exitProg - this.shortcut.entryProg);
-      lateral = sc.lat; dir = scS.dir; width = scS.width;
+      lateral = sc.lat; dir = scS.dir; right = scS.right; width = scS.width;
       y = scS.pos.y;
       onRoad = Math.abs(lateral) <= width / 2;
       onShoulder = Math.abs(lateral) <= width / 2 + 2.2;
@@ -281,7 +339,7 @@ export class TrackManager {
       const sj = this.samples[j];
       progress = ((sm.s + main.along) % this.L + this.L) % this.L;
       lateral = main.lat;
-      dir = sm.dir;
+      dir = sm.dir; right = sm.right;
       width = sm.width + (sj.width - sm.width) * Math.max(0, frac);
       y = sm.pos.y + (sj.pos.y - sm.pos.y) * Math.max(0, frac);
       onRoad = Math.abs(lateral) <= width / 2;
@@ -301,7 +359,8 @@ export class TrackManager {
       }
     }
 
-    return { progress, lateral, y, dir, width, onRoad, onShoulder, onRamp, rampExitSoon, useShortcut,
+    return { progress, lateral, y, dir, right, width, onRoad, onShoulder, onRamp, rampExitSoon, useShortcut,
+             fx: this.zones.length ? this._zoneFxAt(progress) : EMPTY_FX,
              hintMain: main.idx, hintSc: sc ? sc.idx : -1 };
   }
 
@@ -397,3 +456,5 @@ export class TrackManager {
     };
   }
 }
+
+const EMPTY_FX = Object.freeze({ wind: 0, gravMult: 1, gripMult: 1, push: 0 });
