@@ -117,7 +117,7 @@ console.log('--- Screen navigation ---');
   const hud = new HUDManager(i18n);
   check('screen list covers every menu screen the game uses', ['screen-main', 'screen-mode',
     'screen-trackselect', 'screen-cupselect', 'screen-battleselect', 'screen-garage',
-    'screen-records', 'screen-settings', 'screen-pause', 'screen-results',
+    'screen-records', 'screen-online', 'screen-settings', 'screen-pause', 'screen-results',
   ].every((id) => SCREEN_IDS.includes(id)));
 
   // regression: selecting "Start Race" must actually reveal the mode screen
@@ -302,6 +302,97 @@ const summaryText = elements.get('records-summary').tree().map((n) => n.textCont
 check('progression header shows level + xp', /[0-9]/.test(summaryText), `"${summaryText}"`);
 check('summary is localized', findUnlocalized(elements.get('records-summary')).length === 0,
   findUnlocalized(elements.get('records-summary')).join(' | '));
+
+
+// --------------------------------------------------------------- online UI
+console.log('--- Online screen ---');
+{
+  const { OnlineUI } = await import('../src/ui/onlineUI.js');
+  const i18n = new LocalizationManager(memSave());
+  const save = memSave({ playerName: 'Arena', loadout: { characterId: 'nova', chassisId: 'tempest_bolt', wheelId: 'chrome_limbs' } });
+
+  const fakeService = {
+    online: true, status: 'online', latency: 14, name: 'http',
+    async probe() { return true; },
+    async getRanked() { return { season: '2026-09', rank: 4, points: 1032, wins: 3, matches: 7 }; },
+    async fetchLadder() { return [{ rank: 1, name: 'Ada', points: 1120, wins: 5, matches: 8 }]; },
+    async fetchRooms() { return []; },
+  };
+  const roster = new Map([
+    ['p1', { id: 'p1', name: 'Ada', host: true }],
+    ['p2', { id: 'p2', name: 'Bee', host: false }],
+  ]);
+  const fakeSession = {
+    players: roster, host: true, room: 'WXYZ', connected: true,
+    connect() {}, on() {}, join() {}, leave() {}, startRace() {},
+  };
+  const tracks = [{ id: 'sunforge_circuit', nameKey: 'track.sunforge' }];
+  const ui = new OnlineUI({
+    i18n, service: fakeService, tracks, save, session: fakeSession,
+    onBack: () => { ui._backed = true; },
+    onRankedRace: (t) => { ui._rankedTrack = t; },
+    onGhostRace: (t, r) => { ui._ghost = [t, r]; },
+  });
+
+  ui.show();
+  await new Promise((r) => setTimeout(r, 0));
+  check('status chip reports the connection', /online/i.test(elements.get('online-status').textContent));
+  check('ranked card shows season, rank and points', (() => {
+    const text = elements.get('online-ranked').tree().map((n) => n.textContent).join(' ');
+    return text.includes('2026-09') && text.includes('1032') && text.includes('#4');
+  })());
+  check('ladder lists the top player', (() => {
+    const text = elements.get('online-ladder').tree().map((n) => n.textContent).join(' ');
+    return text.includes('Ada') && text.includes('1120');
+  })());
+  check('lobby shows the room code and both racers', (() => {
+    const text = elements.get('online-lobby').tree().map((n) => n.textContent).join(' ');
+    return text.includes('WXYZ') && text.includes('Ada') && text.includes('Bee');
+  })());
+  check('host sees the start hint', elements.get('online-lobby').tree()
+    .some((n) => /start/i.test(n.textContent)));
+  check('racer tag input is prefilled from the save', elements.get('online-name').value === 'Arena');
+  check('track picker offers every track', elements.get('online-track').tree().length >= tracks.length);
+
+  elements.get('btn-online-ranked').click();
+  check('ranked button targets the picked track', ui._rankedTrack === 'sunforge_circuit');
+  elements.get('btn-online-ghost').click();
+  check('ghost button asks for the #1 ghost', ui._ghost && ui._ghost[1] === 1);
+  elements.get('btn-online-back').click();
+  check('back button calls back', ui._backed === true);
+
+  // offline: the same screen must degrade to a clear offline state
+  const offline = new OnlineUI({
+    i18n, tracks, save,
+    service: { online: false, status: 'offline', latency: null, name: 'local',
+      async probe() { return false; }, async getRanked() { return null; },
+      async fetchLadder() { return []; }, async fetchRooms() { return []; } },
+    session: { players: new Map(), host: false, room: null, connect() {}, on() {}, join() {}, leave() {}, startRace() {} },
+  });
+  offline.show();
+  await new Promise((r) => setTimeout(r, 0));
+  check('offline status is honest', /offline/i.test(elements.get('online-status').textContent));
+  check('offline ranked card explains why', elements.get('online-ranked').tree()
+    .some((n) => /server/i.test(n.textContent)));
+
+  // purity: nothing on the screen may be hardcoded
+  const bad = [];
+  for (const id of ['online-status', 'online-ranked', 'online-ghost', 'online-lobby', 'online-ladder']) {
+    for (const node of elements.get(id).tree()) {
+      const text = String(node.textContent || '').trim();
+      if (!text) continue;
+      if (!textIsLocalized(text)) bad.push(`${id}: "${text}"`);
+    }
+  }
+  check('every online string is localized', bad.length === 0, bad.join(' | '));
+
+  // IT switch re-renders without leaking English
+  i18n.setLanguage('it');
+  ui.render();
+  const itText = elements.get('online-ladder').tree().map((n) => n.textContent).join(' ');
+  check('ladder re-renders in Italian', itText.includes('Classifica'), itText);
+  i18n.setLanguage('en');
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

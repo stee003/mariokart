@@ -498,3 +498,58 @@ input[type="range"]::-moz-range-thumb {
 .ach-state { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255, 232, 200, 0.5); }
 .ach-row.earned .ach-state { color: var(--accent2); }
 .records-trophies { margin-top: 14px; }
+
+/* ---------------- battle scoreboard ---------------- */
+.hud-board {
+  position: absolute; top: 74px; right: 26px;
+  display: flex; flex-direction: column; gap: 4px;
+  min-width: 176px;
+}
+.board-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 8px;
+  align-items: center;
+  padding: 4px 9px; border-radius: 8px;
+  background: rgba(24, 12, 8, 0.55);
+  border: 1px solid rgba(255, 178, 96, 0.18);
+  font-size: 13px; font-weight: 700; color: #ffe0b4;
+}
+.board-row.you { border-color: var(--accent2); background: rgba(20, 52, 50, 0.6); }
+.board-row.out { opacity: 0.45; text-decoration: line-through; }
+.board-name { text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7); }
+.board-value { font-variant-numeric: tabular-nums; font-size: 11px; color: #ffd9a8; }
+.board-bar {
+  grid-column: 1 / -1; height: 4px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12); overflow: hidden;
+}
+.board-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+
+/* ---------------- online screen ---------------- */
+.online-head {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin-bottom: 10px;
+}
+.online-field { display: flex; align-items: center; gap: 6px; font-size: 12px; letter-spacing: 0.04em; }
+.online-field span { opacity: 0.8; text-transform: uppercase; }
+.online-field input, .online-field select, .online-code {
+  background: rgba(10, 8, 14, 0.7); color: var(--text);
+  border: 1px solid rgba(255, 178, 96, 0.35); border-radius: 8px;
+  padding: 5px 8px; font: inherit; font-size: 13px;
+}
+.online-code { width: 76px; text-align: center; letter-spacing: 0.22em; text-transform: uppercase; }
+.online-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.records-chip.online { border-color: var(--accent2); color: var(--accent2); }
+@media (max-width: 720px) {
+  .online-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------------- shared list/panel bits used by garage, records, online ---- */
+.panel-head {
+  font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent); opacity: 0.9; margin-bottom: 6px;
+}
+.list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.garage-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.records-hint { font-size: 12px; opacity: 0.75; line-height: 1.4; margin-top: 6px; }

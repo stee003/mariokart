@@ -13,10 +13,12 @@
 // ============================================================================
 
 export const BATTLE_MODES = [
-  { id: 'energy', nameKey: 'battle.energy', descKey: 'battle.energy.d', time: 180, hp: Infinity, goal: 8 },
+  { id: 'energy', nameKey: 'battle.energy', descKey: 'battle.energy.d', time: 180, hp: Infinity, goal: 15 },
   { id: 'elimination', nameKey: 'battle.elimination', descKey: 'battle.elimination.d', time: 0, hp: 3 },
   { id: 'zones', nameKey: 'battle.zones', descKey: 'battle.zones.d', time: 180, hp: 3 },
-  { id: 'survival', nameKey: 'battle.survival', descKey: 'battle.survival.d', time: 0, hp: 3, decay: 0.22 },
+  // Survival: HP drains down to the last point, so attrition weakens everyone
+  // and the finishing blow is always a hit (never a timer).
+  { id: 'survival', nameKey: 'battle.survival', descKey: 'battle.survival.d', time: 0, hp: 3, decay: 0.06 },
   { id: 'score', nameKey: 'battle.score', descKey: 'battle.score.d', time: 150, hp: 3 },
 ];
 
@@ -89,14 +91,12 @@ export class BattleManager {
       if (this.timeLeft <= 0) { this.timeLeft = 0; this._endByTime(); return; }
     }
 
-    // survival decay
+    // survival decay (drains to 1 HP, never eliminates: the last hit decides)
     if (this.mode.decay) {
       for (const [kart, st] of this.per) {
         if (st.eliminated) continue;
-        st.hp -= this.mode.decay * dt;
-        if (st.hp <= 0) this._eliminate(kart, null);
+        st.hp = Math.max(1, st.hp - this.mode.decay * dt);
       }
-      if (this.finished) return;
     }
 
     // zone control
@@ -116,10 +116,11 @@ export class BattleManager {
       if (count !== 1) {
         // contested or empty: progress decays toward neutral
         zone.progress = Math.max(0, zone.progress - dt * 0.8);
+        zone.contestedBy = null;
         if (zone.progress === 0) zone.owner = null;
         continue;
       }
-      if (zone.owner === inside) continue;   // already held
+      if (zone.owner === inside) { zone.contestedBy = null; continue; }   // already held
       zone.progress += dt / ZONE_CAPTURE_TIME;
       zone.contestedBy = inside;
       if (zone.progress >= 1) {
@@ -220,11 +221,27 @@ export class BattleManager {
     const player = this.playerState;
     if (mode === 'energy') {
       const best = Math.max(...[...this.per.values()].map((s) => s.cores));
-      return { timer: this.timeLeft, primary: player ? player.cores : 0, goal: this.mode.goal, leader: best };
+      return {
+        timer: this.timeLeft, primary: player ? player.cores : 0, goal: this.mode.goal,
+        leader: best, hp: player ? Math.ceil(player.hp) : 0, hpMax: player ? player.hpMax : 0,
+      };
     }
-    if (mode === 'zones' || mode === 'score') {
-      return { timer: this.timeLeft, primary: player ? Math.floor(player.score) : 0, hp: player ? Math.ceil(player.hp) : 0 };
+    if (mode === 'zones') {
+      const held = this.zones.filter((z) => z.owner && z.owner.isPlayer).length;
+      return {
+        timer: this.timeLeft, primary: player ? Math.floor(player.score) : 0,
+        hp: player ? Math.ceil(player.hp) : 0, hpMax: player ? player.hpMax : 0,
+        zonesHeld: held, zonesTotal: this.zones.length,
+      };
     }
-    return { timer: 0, hp: player ? Math.ceil(player.hp) : 0 };
+    if (mode === 'score') {
+      return {
+        timer: this.timeLeft, primary: player ? Math.floor(player.score) : 0,
+        hp: player ? Math.ceil(player.hp) : 0, hpMax: player ? player.hpMax : 0,
+      };
+    }
+    return {
+      timer: 0, hp: player ? Math.ceil(player.hp) : 0, hpMax: player ? player.hpMax : 0,
+    };
   }
 }

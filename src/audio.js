@@ -182,4 +182,86 @@ export class AudioManager {
     const notes = win ? [523, 659, 784, 1046] : [392, 494, 587];
     notes.forEach((f, i) => setTimeout(() => this._tone({ type: 'triangle', f0: f, peak: 0.12, decay: 0.3 }), i * 130));
   }
+
+  // ---- character vocalizations ----------------------------------------------
+  // Every pilot carries a voice profile ({pitch, rasp, chattiness}); these are
+  // wordless synthesized reactions (whoops, grunts, cheers) built from a
+  // pitch-swept formant pair plus a breath layer. `distance` (metres) fades
+  // rival reactions so a busy grid does not turn into noise.
+  vocalize(profile, kind = 'greet', { distance = 0 } = {}) {
+    if (!this.ready || !profile) return;
+    const now = this.ctx.currentTime;
+    const cool = VOCAL_COOLDOWN[kind] ?? 0.35;
+    this._vocalT = this._vocalT || {};
+    if ((this._vocalT[kind] || -99) + cool > now) return;
+    this._vocalT[kind] = now;
+
+    const atten = distance > 0 ? Math.max(0, 1 - distance / 55) : 1;
+    if (atten <= 0.02) return;
+    const chat = profile.chattiness ?? 0.6;
+    if (distance > 0 && Math.random() > chat * atten) return;
+
+    const base = (profile.pitch ?? 400) * (VOICE_SHAPE[kind]?.pitch ?? 1);
+    const bend = VOICE_SHAPE[kind]?.bend ?? 1.25;
+    const dur = VOICE_SHAPE[kind]?.dur ?? 0.22;
+    const rasp = Math.max(0, Math.min(1, profile.rasp ?? 0.2)) * (VOICE_SHAPE[kind]?.rasp ?? 1);
+    const peak = Math.min(0.16, (VOICE_SHAPE[kind]?.peak ?? 0.09) * atten * (0.75 + chat * 0.35));
+
+    const g = this.ctx.createGain();
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.value = base * 1.6;
+    hp.Q.value = 1.1 + rasp * 3.5;
+    g.connect(hp);
+    hp.connect(this.master);
+
+    // two detuned voices = a creature rather than a beep
+    for (const [mul, type, mix] of [[1, 'sawtooth', 1], [1.5, 'triangle', 0.5], [2.02, 'sine', 0.28]]) {
+      const o = this.ctx.createOscillator();
+      o.type = type;
+      const f0 = base * mul;
+      o.frequency.setValueAtTime(f0, now);
+      o.frequency.exponentialRampToValueAtTime(Math.max(40, f0 * bend), now + dur);
+      const vg = this.ctx.createGain();
+      vg.gain.value = mix;
+      o.connect(vg);
+      vg.connect(g);
+      o.start(now);
+      o.stop(now + dur + 0.05);
+    }
+
+    // breath / rasp layer scaled by the pilot's voice profile
+    if (rasp > 0.05 && this._noiseBuffer) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this._noiseBuffer;
+      const nf = this.ctx.createBiquadFilter();
+      nf.type = 'bandpass';
+      nf.frequency.value = base * (kind === 'hit' ? 1.1 : 2.2);
+      nf.Q.value = 1.2;
+      const ng = this.ctx.createGain();
+      ng.gain.value = 0.6 * rasp;
+      src.connect(nf); nf.connect(ng); ng.connect(g);
+      src.start(now);
+      src.stop(now + dur + 0.05);
+    }
+
+    this._env(g, now, peak, 0.02, dur);
+  }
 }
+
+// Wordless reaction shapes: relative pitch, pitch bend, length, rasp and
+// loudness per emotional beat.
+const VOICE_SHAPE = {
+  greet:    { pitch: 1.00, bend: 1.35, dur: 0.20, peak: 0.07, rasp: 0.6 },
+  start:    { pitch: 1.05, bend: 1.55, dur: 0.34, peak: 0.11, rasp: 0.8 },
+  boost:    { pitch: 1.25, bend: 1.70, dur: 0.26, peak: 0.10, rasp: 1.0 },
+  hype:     { pitch: 1.15, bend: 1.85, dur: 0.40, peak: 0.12, rasp: 1.1 },
+  hit:      { pitch: 0.72, bend: 0.55, dur: 0.30, peak: 0.13, rasp: 1.4 },
+  overtake: { pitch: 1.10, bend: 1.45, dur: 0.24, peak: 0.09, rasp: 0.9 },
+  win:      { pitch: 1.30, bend: 2.10, dur: 0.55, peak: 0.13, rasp: 0.9 },
+  lose:     { pitch: 0.80, bend: 0.62, dur: 0.50, peak: 0.10, rasp: 1.2 },
+};
+
+const VOCAL_COOLDOWN = {
+  greet: 0.5, start: 1.2, boost: 1.4, hype: 2.5, hit: 0.45, overtake: 1.2, win: 3, lose: 3,
+};

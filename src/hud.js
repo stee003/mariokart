@@ -139,7 +139,7 @@ export function drawItemIcon(canvas, icon, color) {
 export const SCREEN_IDS = [
   'screen-main', 'screen-settings', 'screen-pause', 'screen-results',
   'screen-mode', 'screen-trackselect', 'screen-cupselect', 'screen-battleselect',
-  'screen-garage', 'screen-records',
+  'screen-garage', 'screen-records', 'screen-online',
 ];
 
 export class HUDManager {
@@ -161,6 +161,7 @@ export class HUDManager {
       resultsHeadline: document.getElementById('results-headline'),
       resultsRows: document.getElementById('results-rows'),
       resultsStats: document.getElementById('results-stats'),
+      battleBoard: document.getElementById('battle-board'),
       itemBox: document.getElementById('item-box'),
       itemIcon: document.getElementById('item-icon'),
       itemName: document.getElementById('item-name'),
@@ -252,6 +253,39 @@ export class HUDManager {
     const meter = this.el.boostMeter;
     meter.classList.toggle('charged', v.drift.level >= 3);
     meter.classList.toggle('boost-active', v.boost.boosting);
+  }
+
+  // ------------------------------------------------------------- battle board
+  // rows: [{ name, value, bar (0..1 | null), isPlayer, eliminated }]
+  setBattleBoard(rows) {
+    const box = this.el.battleBoard;
+    if (!box) return;
+    box.innerHTML = '';
+    for (const row of rows) {
+      const line = document.createElement('div');
+      line.className = 'board-row' + (row.isPlayer ? ' you' : '') + (row.eliminated ? ' out' : '');
+      const name = document.createElement('span');
+      name.className = 'board-name';
+      name.textContent = row.name;
+      const value = document.createElement('span');
+      value.className = 'board-value';
+      value.textContent = row.eliminated ? this.i18n.t('battle.out') : row.value;
+      line.append(name, value);
+      if (typeof row.bar === 'number') {
+        const track = document.createElement('span');
+        track.className = 'board-bar';
+        const fill = document.createElement('span');
+        fill.className = 'board-fill';
+        fill.style.width = `${Math.max(0, Math.min(1, row.bar)) * 100}%`;
+        track.appendChild(fill);
+        line.append(track);
+      }
+      box.appendChild(line);
+    }
+  }
+
+  showBattleBoard(on) {
+    this.el.battleBoard?.classList.toggle('hidden', !on);
   }
 
   // ------------------------------------------------------------------ center

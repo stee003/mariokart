@@ -39,8 +39,9 @@ console.log('--- energy mode ---');
   const { battle, karts, events } = bm('energy');
   run(battle, 4);  // past countdown
   check('countdown ends', battle.state === 'running');
-  for (let i = 0; i < 7; i++) battle.boxPicked(karts[0]);
-  check('cores accumulate', battle.per.get(karts[0]).cores === 7);
+  const goal = getBattleMode('energy').goal;
+  for (let i = 0; i < goal - 1; i++) battle.boxPicked(karts[0]);
+  check('cores accumulate', battle.per.get(karts[0]).cores === goal - 1);
   check('no early finish', !battle.finished);
   battle.boxPicked(karts[0]);
   check('goal wins', battle.finished && battle.winner === karts[0]);
@@ -125,7 +126,8 @@ console.log('--- standings & hud ---');
   const rows = battle.standings();
   check('standings ordered by cores', rows[0].kart === karts[2] && rows[1].kart === karts[1]);
   const info = battle.hudInfo();
-  check('hud info exposes timer and cores', info.timer > 0 && info.primary === 0 && info.goal === 8);
+  check('hud info exposes timer and cores',
+    info.timer > 0 && info.primary === 0 && info.goal === getBattleMode('energy').goal);
 }
 
 check('no NaN anywhere', (() => {

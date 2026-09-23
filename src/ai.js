@@ -7,6 +7,7 @@
 import { CONFIG } from './config.js';
 import { normalizeAngle } from './vehicle.js';
 import { ITEMS as ITEMS_BY_ID } from './content/items.js';
+import { shouldUseItem } from './itemAI.js';
 import { effectiveParams, DEFAULT_DIFFICULTY } from './aiDifficulty.js';
 
 const A = CONFIG.ai;
@@ -164,64 +165,15 @@ export class AIController {
   }
 
   // Heuristic decision: should the AI fire the held item now?
-  // Skill-flavored but never unfair - it only chooses WHEN to use an item
-  // the roulette already gave it.
+  // Delegates to the shared itemAI module (used by battle AI as well) so a
+  // single rule set decides item timing everywhere - skill still only scales
+  // WHEN to use an item, never what the roulette hands out.
   _shouldUseItem(def, karts, v, track, s) {
-    const eag = Math.min(1.3, this.dp.boostUse);   // item eagerness, skill-scaled
-    const skill = this.dp.itemSkill;               // scales use-decision rolls only
-    const roll = (base) => Math.random() < Math.min(1, base * skill);
-    const fwdX = Math.sin(v.yaw), fwdZ = Math.cos(v.yaw);
-
-    const aheadDist = () => {
-      let best = Infinity, any = false;
-      for (const other of karts) {
-        if (other.vehicle === v) continue;
-        const dx = other.vehicle.pos.x - v.pos.x;
-        const dz = other.vehicle.pos.z - v.pos.z;
-        const along = dx * fwdX + dz * fwdZ;
-        const side = Math.abs(dx * fwdZ - dz * fwdX);
-        if (along > 0 && side < 4 && along < best) { best = along; any = true; }
-      }
-      return any ? best : Infinity;
-    };
-    const behindDist = () => {
-      let best = Infinity, any = false;
-      for (const other of karts) {
-        if (other.vehicle === v) continue;
-        const dx = other.vehicle.pos.x - v.pos.x;
-        const dz = other.vehicle.pos.z - v.pos.z;
-        const along = dx * fwdX + dz * fwdZ;
-        if (along < 0 && -along < best) { best = -along; any = true; }
-      }
-      return any ? best : Infinity;
-    };
-    const curvHere = Math.abs(track.lineAt(s + 6).curv);
-    const straight = curvHere < 0.015;
-
-    switch (def.category) {
-      case 'projectile': {
-        const d = aheadDist();
-        if (d < 42 && straight && roll(0.5 + eag * 0.4)) return true;
-        return d < 20 && roll(0.3);
-      }
-      case 'hazard': {
-        // drop traps when someone is close behind or on a straight before a corner
-        const bd = behindDist();
-        if (bd < 22 && roll(0.4 + eag * 0.3)) return true;
-        return straight && roll(0.12);
-      }
-      case 'buff':
-        // use boosts/attack buffs on straights
-        return straight && roll(0.35 + eag * 0.45);
-      case 'debuff':
-      case 'zone': {
-        const d = aheadDist();
-        return (d < 48 || behindDist() < 30) && roll(0.3 + eag * 0.4);
-      }
-      case 'utility':
-        return roll(0.25 + eag * 0.3);
-      default:
-        return roll(0.2);
-    }
+    return shouldUseItem({
+      def, karts, v, track, s,
+      eagerness: Math.min(1.3, this.dp.boostUse),   // item eagerness, skill-scaled
+      skill: this.dp.itemSkill,
+      mode: 'race',
+    });
   }
 }

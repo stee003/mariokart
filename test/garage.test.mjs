@@ -288,7 +288,10 @@ check('every roster entry builds a full loadout', roster.every((e) => !!e.loadou
 
 // ------------------------------------------------- loadout -> physics proof
 console.log('--- Loadouts change the driving ---');
-function drive(spec, seconds = 22) {
+// `line` = full throttle down the racing line (no target-speed limiting), so
+// the kart reaches its OWN top speed on the straights; the AI run is capped by
+// the line's speed profile and cannot tell two builds apart on raw speed.
+function drive(spec, seconds = 22, mode = 'ai') {
   const track = new TrackManager();
   const loadout = buildLoadout(spec);
   const v = new VehicleController(track, false, loadout.params, loadout.driftMods);
@@ -299,7 +302,23 @@ function drive(spec, seconds = 22) {
   const dt = 1 / 60;
   let px = v.pos.x, pz = v.pos.z;
   for (let i = 0; i < seconds * 60; i++) {
-    const input = ai.update(dt, [{ vehicle: v }], true, null);
+    let input;
+    if (mode === 'line') {
+      const s = v.surf.progress;
+      const look = 6 * Math.max(0.4, v.speedAbs / 20);
+      const p = track.pointAt(s + look);
+      const lat = track.lineAt(s + look).prefLat;
+      const tx = p.pos.x + p.right.x * lat;
+      const tz = p.pos.z + p.right.z * lat;
+      const desired = Math.atan2(tx - v.pos.x, tz - v.pos.z);
+      const diff = Math.atan2(Math.sin(desired - v.yaw), Math.cos(desired - v.yaw));
+      input = {
+        throttle: 1, brake: 0, steer: Math.max(-1, Math.min(1, diff * 1.6)),
+        drift: false, trick: false, item: false,
+      };
+    } else {
+      input = ai.update(dt, [{ vehicle: v }], true, null);
+    }
     v.step(dt, input, false);
     maxSpeed = Math.max(maxSpeed, v.speedAbs);
     distance += Math.hypot(v.pos.x - px, v.pos.z - pz);
@@ -309,11 +328,13 @@ function drive(spec, seconds = 22) {
 }
 const speedSpec = { characterId: 'nova', chassisId: 'tempest_bolt', wheelId: 'chrome_halos', paintId: 'sunset_orange', decalId: 'none', exhaustId: 'twin_pipes', effectId: 'classic_flame' };
 const heavySpec = { characterId: 'cinder', chassisId: 'ironclad_hauler', wheelId: 'iron_drums', paintId: 'ember_red', decalId: 'none', exhaustId: 'twin_pipes', effectId: 'classic_flame' };
-const speedRun = drive(speedSpec);
-const heavyRun = drive(heavySpec);
+const speedRun = drive(speedSpec, 22);                 // AI lap: distance + feel
+const heavyRun = drive(heavySpec, 22);
+const speedTop = drive(speedSpec, 26, 'line');         // physics: top speed
+const heavyTop = drive(heavySpec, 26, 'line');
 check('speed build reaches a higher top speed than the heavy build',
-  speedRun.maxSpeed > heavyRun.maxSpeed + 0.5,
-  `speed=${(speedRun.maxSpeed * 3.6).toFixed(1)} heavy=${(heavyRun.maxSpeed * 3.6).toFixed(1)} km/h`);
+  speedTop.maxSpeed > heavyTop.maxSpeed + 0.5,
+  `speed=${(speedTop.maxSpeed * 3.6).toFixed(1)} heavy=${(heavyTop.maxSpeed * 3.6).toFixed(1)} km/h`);
 check('heavy build is not simply worse (it covers comparable ground)',
   heavyRun.distance > speedRun.distance * 0.9,
   `heavy=${heavyRun.distance.toFixed(1)}m speed=${speedRun.distance.toFixed(1)}m`);

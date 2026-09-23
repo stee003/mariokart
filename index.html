@@ -20,6 +20,8 @@
         <div class="chip chip-battle hidden" id="battle-info"></div>
       </div>
 
+      <div class="hud-board hidden" id="battle-board"></div>
+
       <div class="hud-center">
         <div id="countdown"></div>
         <div id="notify"></div>
@@ -63,6 +65,7 @@
           <button class="btn btn-primary" id="btn-start" data-i18n="menu.start">Start Race</button>
           <button class="btn" id="btn-garage" data-i18n="menu.garage">Garage</button>
           <button class="btn" id="btn-records" data-i18n="menu.records">Records</button>
+          <button class="btn" id="btn-online" data-i18n="menu.online">Online</button>
           <button class="btn" id="btn-settings" data-i18n="menu.settings">Settings</button>
         </div>
         <div class="menu-meta">
@@ -175,6 +178,47 @@
       </div>
     </div>
 
+    <!-- ===================== ONLINE ===================== -->
+    <div id="screen-online" class="screen hidden">
+      <div class="menu-card records-card">
+        <h2 data-i18n="online.title">Online</h2>
+        <div class="online-head">
+          <div id="online-status" class="records-chip offline"></div>
+          <label class="online-field">
+            <span data-i18n="online.name">Racer tag</span>
+            <input id="online-name" maxlength="16" autocomplete="nickname">
+          </label>
+          <label class="online-field">
+            <span data-i18n="online.track">Track</span>
+            <select id="online-track"></select>
+          </label>
+          <button class="btn btn-small" id="btn-online-refresh" data-i18n="online.refresh">Refresh</button>
+        </div>
+        <div class="online-grid">
+          <div class="records-panel" id="online-ranked"></div>
+          <div class="records-panel" id="online-ghost">
+            <div class="menu-buttons">
+              <button class="btn btn-primary" id="btn-online-ranked" data-i18n="online.rankedRace">Ranked Race</button>
+              <button class="btn" id="btn-online-ghost" data-i18n="online.raceGhost">Race record ghost</button>
+            </div>
+          </div>
+          <div class="records-panel" id="online-lobby">
+            <div class="menu-buttons">
+              <button class="btn" id="btn-online-create" data-i18n="online.create">Create room</button>
+              <input id="online-code" class="online-code" maxlength="4" placeholder="CODE">
+              <button class="btn" id="btn-online-join" data-i18n="online.join">Join</button>
+              <button class="btn" id="btn-online-start" data-i18n="online.startRace">Start race</button>
+              <button class="btn" id="btn-online-leave" data-i18n="online.leave">Leave</button>
+            </div>
+          </div>
+          <div class="records-panel" id="online-ladder"></div>
+        </div>
+        <div class="menu-buttons">
+          <button class="btn" id="btn-online-back" data-i18n="menu.back">Back</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ===================== MODE SELECT ===================== -->
     <div id="screen-mode" class="screen hidden">
       <div class="menu-card">
@@ -241,6 +285,7 @@
         <div id="results-rows"></div>
         <div id="results-stats"></div>
         <div id="results-extra"></div>
+        <div id="results-net" class="records-panel hidden"></div>
         <div class="menu-buttons">
           <button class="btn btn-primary" id="btn-results-restart" data-i18n="menu.restart">Restart</button>
           <button class="btn" id="btn-results-menu" data-i18n="menu.main">Main Menu</button>
