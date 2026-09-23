@@ -98,11 +98,14 @@ export class AIController {
     input.steer = Math.max(-1, Math.min(1, diff * A.steerGain + this.wobble));
 
     // --- speed target -----------------------------------------------------
-    // minimum target speed along the braking distance ahead
+    // minimum target speed along the braking distance ahead, capped by THIS
+    // kart's own top speed (the racing line holds the shared corner limits, so
+    // a faster build is faster on the straights and identical in the corners).
     const horizon = Math.min(70, 12 + (speed * speed) / (2 * A.brakePlanningDecel));
+    const kartCap = v.params.maxSpeed;
     let vTarget = Infinity;
     for (let d = 0; d <= horizon; d += 3.5) {
-      vTarget = Math.min(vTarget, track.lineAt(s + d).targetSpeed);
+      vTarget = Math.min(vTarget, track.lineAt(s + d, kartCap).targetSpeed);
     }
     vTarget *= this.dp.cornerSpeed * this.p.targetSpeed;
 

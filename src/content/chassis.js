@@ -14,19 +14,19 @@ export const CHASSIS = [
   },
   {
     id: 'featherwing', nameKey: 'chassis.featherwing', unlock: { type: 'default' },
-    stats: { acceleration: 2, handling: 1, topSpeed: -2, weight: -1 },
+    stats: { acceleration: 2, handling: 1, topSpeed: -2, driftControl: -1 },
     body: { hull: 'slim', nose: 'dart', pods: 'none', wing: 'fin', scale: 0.92 },
     descKey: 'chassis.featherwing.desc',
   },
   {
     id: 'ironclad_hauler', nameKey: 'chassis.ironcladHauler', unlock: { type: 'default' },
-    stats: { topSpeed: 2, weight: 2, acceleration: -2, handling: -1 },
+    stats: { topSpeed: 2, weight: 1, acceleration: -3, handling: -1 },
     body: { hull: 'wide', nose: 'ram', pods: 'armor', wing: 'none', scale: 1.16 },
     descKey: 'chassis.ironcladHauler.desc',
   },
   {
     id: 'tempest_bolt', nameKey: 'chassis.tempestBolt', unlock: { type: 'level', level: 4 },
-    stats: { topSpeed: 3, acceleration: -2, handling: -1 },
+    stats: { topSpeed: 2, weight: -1, acceleration: -3 },
     body: { hull: 'needle', nose: 'lance', pods: 'side', wing: 'tall', scale: 1.0 },
     descKey: 'chassis.tempestBolt.desc',
   },
@@ -44,13 +44,13 @@ export const CHASSIS = [
   },
   {
     id: 'comet_courier', nameKey: 'chassis.cometCourier', unlock: { type: 'level', level: 3 },
-    stats: { acceleration: 2, topSpeed: 1, handling: -2, driftControl: -1 },
+    stats: { acceleration: 2, topSpeed: 1, handling: -1, driftControl: -2 },
     body: { hull: 'classic', nose: 'dart', pods: 'side', wing: 'tall', scale: 1.0 },
     descKey: 'chassis.cometCourier.desc',
   },
   {
     id: 'gearwork_royale', nameKey: 'chassis.gearworkRoyale', unlock: { type: 'level', level: 8 },
-    stats: { driftControl: 2, acceleration: 1, topSpeed: -1, handling: -1, offRoad: -1 },
+    stats: { driftControl: 2, acceleration: 1, topSpeed: -2, offRoad: -2 },
     body: { hull: 'slim', nose: 'wedge', pods: 'round', wing: 'fin', scale: 1.02 },
     descKey: 'chassis.gearworkRoyale.desc',
   },

@@ -8,8 +8,11 @@ function fake2D() {
   const grad = { addColorStop() {} };
   return {
     createRadialGradient: () => grad, createLinearGradient: () => grad,
-    fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, closePath() {},
-    fill() {}, fillText() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '',
+    fillRect() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, closePath() {},
+    arc() {}, ellipse() {}, quadraticCurveTo() {}, stroke() {}, save() {}, restore() {},
+    translate() {}, rotate() {},
+    fill() {}, fillText() {}, fillStyle: '', strokeStyle: '', lineWidth: 1, lineCap: '',
+    font: '', textAlign: '', textBaseline: '',
   };
 }
 function makeElement(id) {
@@ -53,7 +56,9 @@ const { LocalizationManager } = await import('../src/i18n.js');
 const { AudioManager } = await import('../src/audio.js');
 const { TrackManager } = await import('../src/track.js');
 const { buildEnvironment } = await import('../src/environment.js');
-const { buildKart, updateKartVisual } = await import('../src/kartMesh.js');
+const { buildKart, buildKartFromLoadout, updateKartVisual } = await import('../src/kartMesh.js');
+const { buildRaceRoster } = await import('../src/roster.js');
+const { DEFAULT_LOADOUT } = await import('../src/content/loadout.js');
 const { VehicleController } = await import('../src/vehicle.js');
 const { AIController } = await import('../src/ai.js');
 const { CameraController } = await import('../src/camera.js');
@@ -86,18 +91,35 @@ camCtl.setColliders(env.colliders);
 
 const race = new RaceManager({ track, hud, audio, i18n, onEvent: () => {} });
 const visuals = new Map();
-const defs = [
-  { ai: 'aggressive', nameKey: 'ai.cinder' },
-  { ai: 'balanced', nameKey: 'ai.zephyr' },
-  { ai: 'defensive', nameKey: 'ai.bastion' },
-  { ai: null, nameKey: 'ai.you' },
-];
+// Exact same grid construction main.js uses: the player drives their garage
+// build, each rival brings their own character's loadout.
+const defs = buildRaceRoster({
+  playerSpec: { ...DEFAULT_LOADOUT, characterId: 'thistle', chassisId: 'bumblewisp', wheelId: 'gyro_rings' },
+  rivals: 3,
+  rng: (() => { let s = 7; return () => (s = (s * 1103515245 + 12345) % 2147483647) / 2147483647; })(),
+});
+const kartCharacterIds = [];
 for (const d of defs) {
-  const v = new VehicleController(track, d.ai === null);
-  const kart = { vehicle: v, ai: d.ai ? new AIController(v, track, d.ai) : null, nameKey: d.nameKey, isPlayer: d.ai === null };
+  const v = new VehicleController(track, d.isPlayer, d.loadout.params, d.loadout.driftMods);
+  const kart = {
+    vehicle: v,
+    ai: d.isPlayer ? null : new AIController(v, track, d.personality),
+    nameKey: d.nameKey,
+    characterId: d.characterId,
+    isPlayer: d.isPlayer,
+  };
   race.registerKart(kart);
-  visuals.set(v, buildKart(0xff8a2a, 0x2fd8c8, 0xf2a65a));
+  visuals.set(v, buildKartFromLoadout(d.loadout));
+  kartCharacterIds.push(d.characterId);
 }
+check('grid has four distinct pilots', new Set(kartCharacterIds).size === 4, kartCharacterIds.join(','));
+check('player kart carries its own build', (() => {
+  const p = race.karts.find((k) => k.isPlayer).vehicle.params;
+  const ai = race.karts.find((k) => !k.isPlayer).vehicle.params;
+  return p !== ai && Number.isFinite(p.maxSpeed);
+})());
+check('every kart mesh includes a pilot model', [...visuals.values()].every((v) => !!v.charVis));
+
 const playerKart = race.karts.find((k) => k.isPlayer);
 // let the "player" be driven by an AI brain for this simulation
 playerKart.ai = new AIController(playerKart.vehicle, track, 'balanced');

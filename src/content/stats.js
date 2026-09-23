@@ -36,13 +36,29 @@ export function clampStat(v) {
   return Math.max(1, Math.min(10, v));
 }
 
+// Stacking rule: bonuses from a second part on the SAME attribute are halved
+// (penalties always apply in full). This is the "don't stack one strength"
+// rule that keeps the build space free of obvious optima: two parts pushing
+// top speed gain less than a part pushing top speed plus a part covering a
+// different weakness, so specialising sideways always stays competitive.
+export const STAT_STACK_FACTOR = 0.5;
+
 // Combine character + chassis + wheels into effective stats.
 // parts: array of stat-delta objects, e.g. [{acceleration:+1, topSpeed:-2}, ...]
 export function combineStats(characterStats, ...deltas) {
   const raw = { ...characterStats };
+  const bonuses = Object.create(null);
   for (const d of deltas) {
     for (const k of STAT_KEYS) {
-      if (typeof d[k] === 'number') raw[k] += d[k];
+      const v = d[k];
+      if (typeof v !== 'number' || v === 0) continue;
+      if (v > 0) {
+        const already = bonuses[k] || 0;
+        raw[k] += already === 0 ? v : v * STAT_STACK_FACTOR;
+        bonuses[k] = already + 1;
+      } else {
+        raw[k] += v;
+      }
     }
   }
   const eff = {};

@@ -61,11 +61,13 @@
         </div>
         <div class="menu-buttons">
           <button class="btn btn-primary" id="btn-start" data-i18n="menu.start">Start Race</button>
+          <button class="btn" id="btn-garage" data-i18n="menu.garage">Garage</button>
+          <button class="btn" id="btn-records" data-i18n="menu.records">Records</button>
           <button class="btn" id="btn-settings" data-i18n="menu.settings">Settings</button>
         </div>
         <div class="menu-meta">
-          <div data-i18n="game.pilot">Pilot: Ember the Dustfox</div>
-          <div data-i18n="game.kart">Kart: Dune Blazer MK-1</div>
+          <div id="menu-pilot"></div>
+          <div id="menu-kart"></div>
         </div>
         <div class="controls-hint" data-i18n="controls.help">Controls</div>
       </div>
@@ -118,6 +120,58 @@
           </div>
         </div>
         <button class="btn" id="btn-settings-back" data-i18n="settings.back">Back</button>
+      </div>
+    </div>
+
+    <!-- ===================== GARAGE ===================== -->
+    <div id="screen-garage" class="screen hidden">
+      <div class="menu-card garage-card">
+        <div class="garage-head">
+          <h2 data-i18n="garage.title">Garage</h2>
+          <div class="garage-build" id="garage-build"></div>
+        </div>
+        <div class="garage-body">
+          <div class="garage-preview">
+            <canvas id="garage-canvas"></canvas>
+            <div class="preview-hint" data-i18n="garage.dragHint"></div>
+            <div class="garage-caption" id="garage-caption"></div>
+          </div>
+          <div class="garage-panel">
+            <div class="garage-tabs" id="garage-tabs"></div>
+            <div class="garage-list" id="garage-list"></div>
+            <div class="garage-detail" id="garage-detail"></div>
+          </div>
+          <div class="garage-readout">
+            <div class="garage-stats" id="garage-stats"></div>
+            <div class="garage-perf" id="garage-perf"></div>
+          </div>
+        </div>
+        <div class="garage-foot" id="garage-save-hint"></div>
+        <div class="menu-buttons garage-actions">
+          <button class="btn btn-small" id="btn-garage-randomize" data-i18n="garage.randomize">Surprise me</button>
+          <button class="btn btn-small" id="btn-garage-reset" data-i18n="garage.reset">Stock build</button>
+          <button class="btn btn-small" id="btn-garage-focus" data-i18n="garage.focusPilot">Pilot view</button>
+          <button class="btn" id="btn-garage-back" data-i18n="menu.back">Back</button>
+          <button class="btn btn-primary" id="btn-garage-race" data-i18n="garage.toModes">To the track</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== RECORDS / STATS ===================== -->
+    <div id="screen-records" class="screen hidden">
+      <div class="menu-card records-card">
+        <h2 data-i18n="records.title">Records</h2>
+        <div id="records-summary"></div>
+        <div class="records-grid">
+          <div class="records-panel" id="records-tracks"></div>
+          <div class="records-panel" id="records-board"></div>
+          <div class="records-panel" id="records-achievements"></div>
+          <div class="records-panel" id="records-stats"></div>
+        </div>
+        <div class="menu-buttons">
+          <button class="btn btn-primary" id="btn-records-practice" data-i18n="records.practice">Practice this track</button>
+          <button class="btn" id="btn-records-back" data-i18n="menu.back">Back</button>
+        </div>
       </div>
     </div>
 

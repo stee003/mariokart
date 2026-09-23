@@ -46,6 +46,9 @@ import { LocalProvider } from './online.js';
 
 const FIXED_DT = 1 / 60;
 
+// Themes that count as "after dark" for the Night Shift achievement.
+const NIGHT_THEMES = new Set(['space', 'crystal', 'storm']);
+
 class Game {
   constructor() {
     this.save = new SaveManager();
@@ -56,7 +59,7 @@ class Game {
     this.records = new RecordsStore(this.save);
     this.leaderboard = new LocalLeaderboard(this.save);
     this.provider = new LocalProvider(this.leaderboard);
-    this.appState = 'menu';          // menu | race
+    this.appState = 'menu';          // menu | garage | race
     this.settingsReturn = 'screen-main';
 
     // mode state -------------------------------------------------------------
@@ -85,10 +88,18 @@ class Game {
     this.sparks = new ParticlePool(this.scene, CONFIG.particles.sparkCount, true);
     this.hud = new HUDManager(this.i18n);
 
+    // customization (Increment 6): the garage owns the equipped loadout, the
+    // preview canvas is created lazily the first time the garage opens.
+    this.garage = new Garage(this.save);
+    this.garageUI = null;
+    this.recordsUI = null;
+    this.preview = null;
+
     this.trackId = this.save.get('lastTrack', 'sunforge_circuit');
     this._loadTrack(this.trackId, true);
 
     this.bindUI();
+    this.refreshMenuSummary();
     window.addEventListener('resize', () => this.onResize());
 
     this.clock = new THREE.Clock();
@@ -151,30 +162,33 @@ class Game {
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;   // shown on race start
 
     // karts ---------------------------------------------------------------------
+    // Roster: the player drives their garage build; every rival drives their own
+    // character's signature loadout (src/roster.js), so stats, silhouettes and
+    // physics all differ across the grid. The player entry keeps the 'ai.you'
+    // name key so Grand Prix scoring and records are unchanged.
     this.kartVisuals = new Map();
-    const roster = [
-      { nameKey: 'ai.cinder',  color: 0xd9452f, accent: 0xffd23f, pilot: 0x53302a, ai: 'aggressive' },
-      { nameKey: 'ai.zephyr',  color: 0x2fa877, accent: 0xd8f4e6, pilot: 0x3c5c4e, ai: 'balanced' },
-      { nameKey: 'ai.bastion', color: 0x4159c9, accent: 0x9fb4ff, pilot: 0x37406e, ai: 'defensive' },
-    ].slice(0, solo ? 0 : Math.max(0, Math.min(3, rivals)));
-    roster.push({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
+    this.roster = buildRaceRoster({
+      playerSpec: this.garage.spec,
+      rivals: solo ? 0 : Math.max(0, Math.min(3, rivals)),
+    });
 
     this.race = new RaceManager({
       track: this.track, hud: this.hud, audio: this.audio, i18n: this.i18n,
       items: this.items,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
-    for (const d of roster) {
-      const vehicle = new VehicleController(this.track, d.ai === null);
-      const vis = buildKart(d.color, d.accent, d.pilot);
+    for (const d of this.roster) {
+      const vehicle = new VehicleController(this.track, d.isPlayer, d.loadout.params, d.loadout.driftMods);
+      const vis = buildKartFromLoadout(d.loadout);
       this.scene.add(vis.group);
       this.scene.add(vis.shadow);
       this.kartVisuals.set(vehicle, vis);
       const kart = {
         vehicle,
-        ai: d.ai ? new AIController(vehicle, this.track, d.ai) : null,
+        ai: d.isPlayer ? null : new AIController(vehicle, this.track, d.personality),
         nameKey: d.nameKey,
-        isPlayer: d.ai === null,
+        characterId: d.characterId,
+        isPlayer: d.isPlayer,
         charVis: vis.charVis || null,
       };
       if (kart.ai) kart.ai.setDifficulty(this.save.get('difficulty', 'normal'));
@@ -261,6 +275,7 @@ class Game {
     $('lang-en').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('en'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     $('lang-it').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('it'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     syncLang();
+    this.i18n.onChange(() => this.refreshMenuSummary());
 
     // sliders
     $('cam-dist').value = this.camCtl.distance;
@@ -352,6 +367,96 @@ class Game {
   }
 
   openSettings() { this.hud.showScreen('screen-settings'); }
+
+  // -------------------------------------------------------------- garage / UI
+  // The garage is a menu-level state: the race renderer keeps its world (so
+  // returning to the grid is instant) but stops drawing while the preview's
+  // own canvas is on screen.
+  openGarage() {
+    this.appState = 'garage';
+    this.hud.showHUD(false);
+    if (!this.preview) this.preview = new KartPreview(document.getElementById('garage-canvas'));
+    if (!this.garageUI) {
+      this.garageUI = new GarageUI({
+        i18n: this.i18n,
+        garage: this.garage,
+        preview: this.preview,
+        onBack: () => this.closeGarage(),
+        onRace: () => { this.closeGarage(); this.openModeSelect(); },
+      });
+    }
+    this.hud.showScreen('screen-garage');
+    this.garageUI.show();
+    this.music.setState('menu');
+  }
+
+  closeGarage() {
+    if (this.garageUI) this.garageUI.hide();
+    this.appState = 'menu';
+    this.hud.showScreen('screen-main');
+    this.refreshMenuSummary();
+    this._rebuildPlayerVisual();
+  }
+
+  // Menu-level records/leaderboard/achievement browser.
+  openRecords() {
+    if (!document.getElementById('screen-records')) return;
+    this.appState = 'menu';
+    if (!this.recordsUI) {
+      this.recordsUI = new RecordsUI({
+        i18n: this.i18n,
+        save: this.save,
+        provider: this.provider,
+        records: this.records,
+        onBack: () => this.hud.showScreen('screen-main'),
+        onPractice: (trackId) => this._startModeOnTrack('timetrial', trackId),
+      });
+    }
+    this.hud.showScreen('screen-records');
+    this.recordsUI.show();
+  }
+
+  // Player headline lines on the main menu (pilot + current build).
+  refreshMenuSummary() {
+    const loadout = this.garage.loadout;
+    const i18n = this.i18n;
+    const pilot = document.getElementById('menu-pilot');
+    const kart = document.getElementById('menu-kart');
+    if (pilot) {
+      pilot.textContent = i18n.t('menu.pilotLine', {
+        name: i18n.t(loadout.character.nameKey),
+        species: i18n.t(loadout.character.speciesKey),
+      });
+    }
+    if (kart) {
+      kart.textContent = i18n.t('menu.kartLine', {
+        chassis: i18n.t(loadout.chassis.nameKey),
+        wheels: i18n.t(loadout.wheels.nameKey),
+      });
+    }
+  }
+
+  // Swaps the player's kart mesh + physics to the freshly equipped build
+  // without rebuilding the world (used after the garage closes).
+  _rebuildPlayerVisual() {
+    const kart = this.playerKart;
+    if (!kart || !this.kartVisuals) return;
+    const old = this.kartVisuals.get(kart.vehicle);
+    if (old) {
+      this.scene.remove(old.group);
+      this.scene.remove(old.shadow);
+    }
+    const loadout = this.garage.loadout;
+    const vis = buildKartFromLoadout(loadout);
+    this.scene.add(vis.group);
+    this.scene.add(vis.shadow);
+    this.kartVisuals.set(kart.vehicle, vis);
+    kart.charVis = vis.charVis || null;
+    kart.characterId = loadout.character.id;
+    kart.vehicle.params = loadout.params;
+    kart.vehicle.driftMods = loadout.driftMods;
+    kart.vehicle.drift.mods = loadout.driftMods;
+  }
 
   // ------------------------------------------------------------ mode selection
   openModeSelect() {
@@ -854,6 +959,7 @@ class Game {
       recordStats(this.save, {
         races: 1, wins: playerPos === 1 ? 1 : 0,
         podiums: playerPos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+        nightWins: playerPos === 1 && NIGHT_THEMES.has(this.track.def.theme) ? 1 : 0,
       });
 
       const div = document.createElement('div');
@@ -964,6 +1070,7 @@ class Game {
       recordStats(this.save, {
         races: 1, wins: pos === 1 ? 1 : 0,
         podiums: pos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+        nightWins: pos === 1 && NIGHT_THEMES.has(this.track.def.theme) ? 1 : 0,
       });
       this._finishProgression({ kind: 'race', pos, rivals: order.length - 1 },
         { boardTime: pst.finishTime });
@@ -1117,6 +1224,12 @@ class Game {
 
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
+    } else if (this.appState === 'garage') {
+      // garage: only the preview canvas animates, the race world is frozen
+      if (this.input.wasPressed('pause')) this.closeGarage();
+      if (this.preview) this.preview.update(rawDt, this.time);
+      this.input.endFrame();
+      return;
     } else if (this.mode === 'battle' && this.battle) {
       // ---------------------------------------------------------- battle mode
       if (this.input.wasPressed('pause')) {
@@ -1265,4 +1378,6 @@ try {
   console.error(err);
   document.getElementById('webgl-error').classList.remove('hidden');
   for (const s of ['screen-main']) document.getElementById(s).classList.add('hidden');
+}
+getElementById(s).classList.add('hidden');
 }

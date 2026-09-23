@@ -129,6 +129,38 @@ export const CONFIG = {
         aggression: 0.12, blockiness: 0.85, mistakeRate: 0.018,
         startBoostChance: 0.25, driftEagerness: 0.55,
       },
+      // Additional rival personalities (Increment 6). Same contract as the
+      // three above: none of them grants speed - targetSpeed stays <= 1.0 and
+      // cornerSpeed never exceeds the 'aggressive' baseline of 1.03, so every
+      // personality is a style/habit profile, never an upgrade.
+      speedster: {
+        displayName: 'ai.speedster',
+        color: 0x2fd8c8, accent: 0xffe08a,
+        targetSpeed: 1.0, cornerSpeed: 0.985, boostUse: 0.95,
+        aggression: 0.5, blockiness: 0.15, mistakeRate: 0.035,
+        startBoostChance: 0.6, driftEagerness: 0.95,
+      },
+      technical: {
+        displayName: 'ai.technical',
+        color: 0x8ab8e8, accent: 0xbaf0ff,
+        targetSpeed: 0.985, cornerSpeed: 1.0, boostUse: 0.8,
+        aggression: 0.25, blockiness: 0.5, mistakeRate: 0.02,
+        startBoostChance: 0.45, driftEagerness: 0.85,
+      },
+      wildcard: {
+        displayName: 'ai.wildcard',
+        color: 0xff5df1, accent: 0xfff08a,
+        targetSpeed: 0.99, cornerSpeed: 0.995, boostUse: 0.85,
+        aggression: 0.75, blockiness: 0.1, mistakeRate: 0.09,
+        startBoostChance: 0.8, driftEagerness: 1.0,
+      },
+      guardian: {
+        displayName: 'ai.guardian',
+        color: 0xc96f2a, accent: 0x8ad0ff,
+        targetSpeed: 0.975, cornerSpeed: 0.975, boostUse: 0.6,
+        aggression: 0.15, blockiness: 0.9, mistakeRate: 0.022,
+        startBoostChance: 0.3, driftEagerness: 0.6,
+      },
     },
   },
 

@@ -133,6 +133,15 @@ export function drawItemIcon(canvas, icon, color) {
   g.restore();
 }
 
+// Every full-screen panel the state machine can show. Listed here (instead of
+// hardcoding a subset inside showScreen) so adding a screen can never leave
+// the previous one visible on top of it.
+export const SCREEN_IDS = [
+  'screen-main', 'screen-settings', 'screen-pause', 'screen-results',
+  'screen-mode', 'screen-trackselect', 'screen-cupselect', 'screen-battleselect',
+  'screen-garage', 'screen-records',
+];
+
 export class HUDManager {
   constructor(i18n) {
     this.i18n = i18n;
@@ -184,8 +193,9 @@ export class HUDManager {
   showHUD(visible) { this.el.hud.classList.toggle('hidden', !visible); }
 
   showScreen(id) {
-    for (const s of ['screen-main', 'screen-settings', 'screen-pause', 'screen-results']) {
-      document.getElementById(s).classList.toggle('hidden', s !== id);
+    for (const s of SCREEN_IDS) {
+      const node = document.getElementById(s);
+      if (node) node.classList.toggle('hidden', s !== id);
     }
   }
 
