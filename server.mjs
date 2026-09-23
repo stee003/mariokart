@@ -20,7 +20,34 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
-const PORT = Number(process.env.PORT || process.argv[2] || 8000);
+const DEFAULT_PORT = 8000;
+
+// $PORT / argv[2] can arrive malformed from the surrounding environment
+// ("8000 " with trailing space, "abc", a stale path, ...). Naively doing
+// Number() on that yields NaN and server.listen() dies with a cryptic
+// ERR_SOCKET_BAD_PORT crash. Parse defensively instead: use the first
+// well-formed port found ($PORT, then the argument), otherwise fall back
+// to 8000 — and say exactly which value we rejected and why.
+function resolvePort() {
+  const candidates = [];
+  if ((process.env.PORT ?? '').trim() !== '') {
+    candidates.push(['$PORT', process.env.PORT.trim()]);
+  }
+  if ((process.argv[2] ?? '').trim() !== '') {
+    candidates.push(['command-line argument', process.argv[2].trim()]);
+  }
+  for (const [source, raw] of candidates) {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 0 && n <= 65535) return n;
+    console.warn(`  Warning: ${source} ("${raw}") is not a valid port (need an integer 0-65535).`);
+  }
+  if (candidates.length > 0) {
+    console.warn(`  Falling back to default port ${DEFAULT_PORT}.\n`);
+  }
+  return DEFAULT_PORT;
+}
+
+const PORT = resolvePort();
 const HOST = process.env.HOST || '0.0.0.0';
 
 const MIME = {
