@@ -94,7 +94,8 @@ export const CONFIG = {
     liftDecay: 18.0,             // 1/s decay of the remembered climb rate
     pitchSmooth: 9.0,            // 1/s smoothing of the visual chassis pitch
     rollSmooth: 8.0,             // 1/s smoothing of the visual chassis roll
-    maxPitch: 0.55,              // rad of terrain pitch the chassis will show
+    airPitchSmooth: 4.8,         // 1/s: chassis follows the real jump arc
+    maxPitch: 0.55,              // rad of terrain/jump pitch the chassis will show
     maxRoll: 0.40,               // rad of terrain roll the chassis will show
     squashPerFallSpeed: 0.022,   // suspension compression per m/s of impact
     squashRecover: 5.5,          // 1/s recovery of the suspension squash

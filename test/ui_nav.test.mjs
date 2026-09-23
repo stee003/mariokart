@@ -108,6 +108,9 @@ check('all menu screens carry the .screen class',
 check('exactly the main menu starts visible',
   [...document.querySelectorAll('.screen')]
     .filter((s) => !s.classList.contains('hidden')).map((s) => s.id).join(',') === 'screen-main');
+check('main menu uses the polished command-panel structure',
+  html.includes('main-menu-card') && html.includes('main-actions')
+    && html.includes('loadout-panel') && html.includes('action-note'));
 
 // every element id referenced by main.js's bindUI must exist in markup
 const mainSrc = fs.readFileSync(path.join(ROOT, 'src/main.js'), 'utf8');

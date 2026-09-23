@@ -24,6 +24,7 @@ import { TRACK_DEFS } from '../src/content/trackDefs.js';
 import { VehicleController } from '../src/vehicle.js';
 import { AIController } from '../src/ai.js';
 import { CONFIG } from '../src/config.js';
+import { buildRampBandGeometry } from '../src/terrainMesh.js';
 
 let passed = 0, failed = 0;
 const check = (name, cond, extra = '') => {
@@ -118,6 +119,46 @@ for (const def of TRACK_DEFS) {
   check(`${def.id}: ramps feather laterally and reach full height`, ok, why);
 }
 
+// --------------------------------------- rendered/physical ramp are identical
+console.log('--- Ramp visuals share the physical contact profile ---');
+for (const def of TRACK_DEFS) {
+  const track = new TrackManager(def);
+  const r = track.ramps?.[0];
+  if (!r) { check(`${def.id}: no ramp mesh needed`, true); continue; }
+
+  // terrainMesh stores the source progress/lateral beside every generated
+  // vertex. Its world Y must be the canonical collision Y plus only the tiny
+  // anti-z-fighting render offset.
+  const geo = buildRampBandGeometry(track, r, {
+    lateralA: r.lat - r.halfW - r.feather,
+    lateralB: r.lat + r.halfW + r.feather,
+  });
+  const attr = geo.getAttribute('position');
+  const source = geo.userData.surfaceSamples;
+  let maxError = 0;
+  for (let i = 0; i < source.length; i++) {
+    maxError = Math.max(maxError, Math.abs(attr.getY(i) - (source[i].surfaceY + 0.045)));
+  }
+  check(`${def.id}: visible ramp vertices match collision height`, maxError < 1e-4,
+    `error=${maxError.toFixed(6)}`);
+  geo.dispose();
+
+  // The attitude gradient must also be the derivative of that same profile,
+  // including on the tapered shoulder (the former grade*w approximation was
+  // visibly wrong here).
+  const s = r.s0 + r.len * 0.47;
+  const lat = r.lat + r.halfW + r.feather * 0.43;
+  const e = 0.015;
+  const sample = track.rampSurfaceAt(r, s, lat);
+  const slopeNum = (track.rampSurfaceAt(r, s + e, lat).y
+    - track.rampSurfaceAt(r, s - e, lat).y) / (2 * e);
+  const bankNum = (track.rampSurfaceAt(r, s, lat + e).y
+    - track.rampSurfaceAt(r, s, lat - e).y) / (2 * e);
+  check(`${def.id}: ramp animation gradient matches physical profile`,
+    Math.abs(sample.slope - slopeNum) < 0.025 && Math.abs(sample.bank - bankNum) < 0.025,
+    `slope ${sample.slope.toFixed(3)}/${slopeNum.toFixed(3)} bank ${sample.bank.toFixed(3)}/${bankNum.toFixed(3)}`);
+}
+
 // --------------------------------------------------- driving stays glued down
 console.log('--- Driving a full lap stays glued to the ground ---');
 for (const def of TRACK_DEFS) {
@@ -205,12 +246,22 @@ console.log('--- Ramps still launch (the fix must not flatten the game) ---');
   const r = track.ramps[0];
   const v = new VehicleController(track, false);
   v.place(track.placeAt(r.s0 - 40, r.lat));
-  let launched = false, peak = 0;
-  for (let t = 0; t < 8 && !launched; t += dt) {
+  let launched = false, peak = 0, coherentY = true;
+  let ascentPitch = 0, descentPitch = 0;
+  for (let t = 0; t < 8; t += dt) {
     v.step(dt, { throttle: 1, brake: 0, steer: 0, drift: false, trick: false }, false);
-    if (!v.grounded && v.vy > 1) { launched = true; peak = v.vy; }
+    coherentY &&= Math.abs(v.pos.y - v.y) < 1e-9;
+    if (!v.grounded && v.vy > 1) {
+      launched = true;
+      peak = Math.max(peak, v.vy);
+      ascentPitch = Math.max(ascentPitch, v.terrainPitch);
+    }
+    if (!v.grounded && v.vy < -1) descentPitch = Math.min(descentPitch, v.terrainPitch);
   }
   check('a real ramp still throws the kart airborne', launched, `vy=${peak.toFixed(2)}`);
+  check('world transform stays attached to the physical jump', coherentY);
+  check('jump attitude follows ascent then descent', ascentPitch > 0.04 && descentPitch < -0.01,
+    `up=${ascentPitch.toFixed(3)} down=${descentPitch.toFixed(3)}`);
 }
 
 // ------------------------------------------------- attitude tracks real slope

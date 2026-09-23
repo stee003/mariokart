@@ -305,16 +305,21 @@ export function animateCharacter(charVis, vehicle, dt, time) {
 
   // Lateral lean from sliding, plus a counter-lean against the terrain roll:
   // the pilot stays roughly upright while the kart banks, instead of being
-  // rigidly welded to a chassis that is now tilting with the ground.
+  // rigidly welded to a chassis that is now tilting with the ground. The
+  // visual values are fixed-step interpolated by updateKartVisual, keeping
+  // the pilot on the same contact timeline as the chassis.
+  const ridePitch = vehicle.visualPitch ?? vehicle.terrainPitch ?? 0;
+  const rideRoll = vehicle.visualRoll ?? vehicle.terrainRoll ?? 0;
+  const rideSuspension = vehicle.visualSuspension ?? vehicle.suspension ?? 0;
   const slideLean = -vehicle.latSpeed * 0.035;
-  const counter = -(vehicle.terrainRoll || 0) * 0.45;
+  const counter = -rideRoll * 0.45;
   const lean = Math.max(-0.35, Math.min(0.35, slideLean + counter));
   g.rotation.z += (lean - g.rotation.z) * Math.min(1, 8 * dt);
 
   // Fore/aft body english: the pilot is pushed back climbing and thrown
   // forward on a descent or a landing, then settles again.
   const slopeLean = Math.max(-0.30, Math.min(0.30,
-    -(vehicle.terrainPitch || 0) * 0.5 - (vehicle.suspension || 0) * 0.35));
+    -ridePitch * 0.5 - rideSuspension * 0.35));
   const airTuck = vehicle.grounded ? 0 : -0.16;   // tucks in while airborne
   const targetPitch = Math.max(-0.42, Math.min(0.42, slopeLean + airTuck));
   g.rotation.x += (targetPitch - g.rotation.x) * Math.min(1, 9 * dt);
@@ -324,9 +329,9 @@ export function animateCharacter(charVis, vehicle, dt, time) {
   // head clipping through the chassis.
   const bob = Math.sin(time * (6 + vehicle.speedAbs * 0.5)) * 0.012
     * Math.min(1, vehicle.speedAbs / 10);
-  const jolt = -(vehicle.suspension || 0) * 0.07;
+  const jolt = -rideSuspension * 0.07;
   charVis.head.position.y = 0.36 + bob + jolt;
   // look into the slope while grounded, level out in the air
-  const lookPitch = -vehicle.steer * 0.12 + (vehicle.grounded ? (vehicle.terrainPitch || 0) * 0.3 : 0);
+  const lookPitch = -vehicle.steer * 0.12 + (vehicle.grounded ? ridePitch * 0.3 : 0);
   charVis.head.rotation.x = Math.max(-0.25, Math.min(0.25, lookPitch));
 }

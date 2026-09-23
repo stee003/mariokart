@@ -59,24 +59,64 @@
     </div>
 
     <!-- ===================== MAIN MENU ===================== -->
-    <div id="screen-main" class="screen">
-      <div class="menu-card">
-        <div class="title-block">
-          <div class="title-sun"></div>
+    <div id="screen-main" class="screen main-screen">
+      <div class="menu-card main-menu-card">
+        <div class="main-card-glow" aria-hidden="true"></div>
+        <div class="title-block main-title-block">
+          <div class="title-sun" aria-hidden="true"><span></span></div>
+          <div class="menu-kicker" data-i18n="menu.kicker">Arcade Grand Prix</div>
           <h1 data-i18n="game.title">Sunforge Racers</h1>
           <div class="subtitle" data-i18n="game.subtitle">Desert Canyon Grand Prix</div>
         </div>
-        <div class="menu-buttons">
-          <button class="btn btn-primary" id="btn-start" data-i18n="menu.start">Start Race</button>
-          <button class="btn" id="btn-garage" data-i18n="menu.garage">Garage</button>
-          <button class="btn" id="btn-settings" data-i18n="menu.settings">Settings</button>
+
+        <div class="menu-divider" aria-hidden="true"><span></span></div>
+        <div class="menu-section-label" data-i18n="menu.command">Race command</div>
+
+        <div class="menu-buttons main-actions">
+          <button class="btn btn-primary main-action" id="btn-start">
+            <span class="action-index" aria-hidden="true">01</span>
+            <span class="action-copy">
+              <span class="action-title" data-i18n="menu.start">Start Race</span>
+              <span class="action-note" data-i18n="menu.startHint">Choose a mode and take the grid</span>
+            </span>
+            <span class="action-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn main-action" id="btn-garage">
+            <span class="action-index" aria-hidden="true">02</span>
+            <span class="action-copy">
+              <span class="action-title" data-i18n="menu.garage">Garage</span>
+              <span class="action-note" data-i18n="menu.garageHint">Tune your pilot and kart</span>
+            </span>
+            <span class="action-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn main-action" id="btn-settings">
+            <span class="action-index" aria-hidden="true">03</span>
+            <span class="action-copy">
+              <span class="action-title" data-i18n="menu.settings">Settings</span>
+              <span class="action-note" data-i18n="menu.settingsHint">Controls, display and accessibility</span>
+            </span>
+            <span class="action-arrow" aria-hidden="true">›</span>
+          </button>
         </div>
-        <div class="menu-meta" id="menu-meta">
-          <div id="menu-pilot">Pilot: Ember the Dustfox</div>
-          <div id="menu-kart">Kart: Dune Blazer MK-1</div>
+
+        <div class="loadout-panel">
+          <div class="loadout-head">
+            <span data-i18n="menu.activeLoadout">Active loadout</span>
+            <span class="loadout-ready"><i aria-hidden="true"></i><span data-i18n="menu.ready">Ready</span></span>
+          </div>
+          <div class="menu-meta" id="menu-meta">
+            <div class="meta-line"><span class="meta-mark" aria-hidden="true">P</span><div id="menu-pilot">Pilot: Ember the Dustfox</div></div>
+            <div class="meta-line"><span class="meta-mark" aria-hidden="true">K</span><div id="menu-kart">Kart: Dune Blazer MK-1</div></div>
+          </div>
         </div>
-        <div class="controls-hint" data-i18n="controls.help">Controls</div>
-        <div class="controls-hint" data-i18n="controls.gamepad">Gamepad</div>
+
+        <div class="main-controls">
+          <div class="control-status" aria-hidden="true"><span></span></div>
+          <div>
+            <div class="controls-hint" data-i18n="controls.help">Controls</div>
+            <div class="controls-hint gamepad-hint" data-i18n="controls.gamepad">Gamepad</div>
+          </div>
+        </div>
       </div>
     </div>
 

@@ -415,7 +415,10 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
 
   // -------------------------------------------------- pose interpolation
   const prev = kartVis._prev || (kartVis._prev = {
-    x: vehicle.pos.x, y: vehicle.y, z: vehicle.pos.z, yaw: vehicle.yaw, stamp: -1,
+    x: vehicle.pos.x, y: vehicle.y, z: vehicle.pos.z, yaw: vehicle.yaw,
+    pitch: vehicle.terrainPitch || 0, roll: vehicle.terrainRoll || 0,
+    suspension: vehicle.suspension || 0,
+    stamp: -1,
   });
   // A new physics step is detected by the vehicle's own step counter, so the
   // previous pose is only latched once per step, never once per frame.
@@ -424,8 +427,14 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     prev.y = prev.cy ?? vehicle.y;
     prev.z = prev.cz ?? vehicle.pos.z;
     prev.yaw = prev.cyaw ?? vehicle.yaw;
+    prev.pitch = prev.cpitch ?? (vehicle.terrainPitch || 0);
+    prev.roll = prev.croll ?? (vehicle.terrainRoll || 0);
+    prev.suspension = prev.csuspension ?? (vehicle.suspension || 0);
     prev.cx = vehicle.pos.x; prev.cy = vehicle.y;
     prev.cz = vehicle.pos.z; prev.cyaw = vehicle.yaw;
+    prev.cpitch = vehicle.terrainPitch || 0;
+    prev.croll = vehicle.terrainRoll || 0;
+    prev.csuspension = vehicle.suspension || 0;
     prev.stamp = vehicle.stepId;
   }
   const a = Math.max(0, Math.min(1, alpha));
@@ -445,12 +454,26 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     x: g.position.x, y: g.position.y, z: g.position.z, yaw: g.rotation.y,
   };
 
-  // The chassis rides the terrain: pitch with the slope it is climbing or
-  // descending, roll with the cross-slope, and compress on impact. Airborne
-  // karts level out (terrainPitch/Roll decay to 0 in the vehicle).
+  // The chassis rides the exact collision gradient and follows the ballistic
+  // velocity while airborne. Attitude is interpolated on the same timeline as
+  // position, otherwise the body begins its jump pose one fixed step before
+  // it has visually reached the ramp lip.
+  const pitch = prev.pitch + (prev.cpitch - prev.pitch) * a;
+  const roll = prev.roll + (prev.croll - prev.roll) * a;
+  const suspension = prev.suspension + (prev.csuspension - prev.suspension) * a;
+  kartVis.renderPose.pitch = pitch;
+  kartVis.renderPose.roll = roll;
+  kartVis.renderPose.suspension = suspension;
+  // The pilot animator runs immediately after this function and consumes the
+  // same interpolated contact state instead of jumping ahead to physics time.
+  vehicle.visualPitch = pitch;
+  vehicle.visualRoll = roll;
+  vehicle.visualSuspension = suspension;
   g.rotation.order = 'YXZ';
-  g.rotation.x = vehicle.terrainPitch || 0;
-  g.rotation.z = vehicle.terrainRoll || 0;
+  // Three.js positive X rotation lowers local +Z (the kart's nose), while the
+  // physics convention is positive=nose-up.
+  g.rotation.x = -pitch;
+  g.rotation.z = roll;
 
   // aerial trick spin
   let trickPitch = 0;
@@ -475,7 +498,8 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
   body.rotation.z += (targetRoll - body.rotation.z) * Math.min(1, 10 * dt);
   body.rotation.x += (targetPitch - body.rotation.x) * Math.min(1, 12 * dt);
   // suspension: the chassis dips into the wheels on landing, then rebounds
-  body.position.y = -(vehicle.suspension || 0) * 0.22;
+  // on the same interpolated contact timeline as the wheels.
+  body.position.y = -suspension * 0.22;
 
   // item-hit spinout visual
   if (vehicle._spinT > 0) {
@@ -497,11 +521,28 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     kartVis.flameMat.color.offsetHSL(Math.sin(time * 20) * 0.06, 0, Math.sin(time * 33) * 0.08);
   }
 
-  // blob shadow follows on the ground, under the INTERPOLATED body so it
-  // never lags a frame behind the kart on bumpy ground
+  // Blob shadow queries the ground below the INTERPOLATED body. Using the
+  // current physics sample here made it drop off the lip a frame before the
+  // rendered kart arrived there. It also aligns to the physical normal, so it
+  // no longer cuts through an inclined ramp like a horizontal decal.
   const sh = kartVis.shadow;
-  const groundY = vehicle.surf ? vehicle.surf.y : vehicle.y;
+  let shadowSurf = vehicle.surf;
+  if (vehicle.track) {
+    const probe = kartVis._shadowProbe || (kartVis._shadowProbe = new THREE.Vector3());
+    const hint = kartVis._shadowHint || (kartVis._shadowHint = { main: -1, sc: -1 });
+    probe.set(g.position.x, g.position.y, g.position.z);
+    shadowSurf = vehicle.track.surface(probe, hint);
+  }
+  const groundY = shadowSurf ? shadowSurf.y : vehicle.y;
   sh.position.set(g.position.x, groundY + 0.04, g.position.z);
+  if (shadowSurf) {
+    const gx = shadowSurf.dir.x * (shadowSurf.slope || 0)
+      + shadowSurf.right.x * (shadowSurf.bank || 0);
+    const gz = shadowSurf.dir.z * (shadowSurf.slope || 0)
+      + shadowSurf.right.z * (shadowSurf.bank || 0);
+    _shadowNormal.set(-gx, 1, -gz).normalize();
+    sh.quaternion.setFromUnitVectors(_shadowLocalNormal, _shadowNormal);
+  }
   const h = Math.max(0, g.position.y - groundY);
   const s = Math.max(0.45, 1 - h * 0.12);
   sh.scale.set(s, s, s);
@@ -514,3 +555,8 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     g.visible = true;
   }
 }
+
+// CircleGeometry faces local +Z before its transform. Reorient that normal to
+// the sampled terrain normal for a flush ramp/road shadow.
+const _shadowLocalNormal = new THREE.Vector3(0, 0, 1);
+const _shadowNormal = new THREE.Vector3(0, 1, 0);

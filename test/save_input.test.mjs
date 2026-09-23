@@ -116,6 +116,15 @@ const memStore = { get: (k, fb) => (k in memStore._d ? memStore._d[k] : fb), set
   check('default throttle mapping', input.isDown('throttle'));
   check('no remap by default', input.bindings().throttle === 'KeyW' || input.bindings().throttle === 'ArrowUp');
 
+  // Vehicle steering uses positive yaw for a visual left turn. The input
+  // boundary must map conventional left controls to that sign.
+  fire('keydown', 'KeyA');
+  check('A steers visually left', input.snapshot().steer === 1);
+  fire('keyup', 'KeyA');
+  fire('keydown', 'ArrowRight');
+  check('right arrow steers visually right', input.snapshot().steer === -1);
+  fire('keyup', 'ArrowRight');
+
   input.setBinding('throttle', 'KeyJ');
   fire('keyup', 'KeyW');
   check('old binding stops working after remap', !input.isDown('throttle'));
@@ -156,15 +165,27 @@ const memStore = { get: (k, fb) => (k in memStore._d ? memStore._d[k] : fb), set
       pressed: !!over['b' + i], value: over['v' + i] ?? (over['b' + i] ? 1 : 0),
     })),
   });
-  let pad = mkPad({ steer: 0.6, v7: 0.8 });
+  let pad = mkPad({ steer: -0.6, v7: 0.8 });
   Object.defineProperty(global, 'navigator', { value: { getGamepads: () => [pad] }, configurable: true, writable: true });
   const input = new InputManager(gameWithStorage(makeStorage()));
 
   input.poll();
   check('gamepad detected', input.gamepadConnected);
   const snap = input.snapshot();
-  check('analog stick steers', Math.abs(snap.steer - 0.6) < 1e-6, `steer=${snap.steer}`);
+  check('stick-left steers visually left', Math.abs(snap.steer - 0.6) < 1e-6, `steer=${snap.steer}`);
+  check('stick-left reports the left action', input.isDown('left') && !input.isDown('right'));
   check('analog trigger throttles', Math.abs(snap.throttle - 0.8) < 1e-6);
+
+  pad = mkPad({ b14: true });               // d-pad left
+  global.navigator.getGamepads = () => [pad];
+  input.poll();
+  check('d-pad left steers visually left', input.snapshot().steer === 1);
+
+  pad = mkPad({ steer: 0.6, b15: true });   // stick/d-pad right
+  global.navigator.getGamepads = () => [pad];
+  input.poll();
+  check('stick and d-pad right steer visually right', input.snapshot().steer === -1
+    && input.isDown('right') && !input.isDown('left'));
 
   pad = mkPad({ steer: 0.05 });            // inside dead zone
   global.navigator.getGamepads = () => [pad];
