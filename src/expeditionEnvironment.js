@@ -394,3 +394,6 @@ export function buildExpeditionEnvironment(group, track, rnd, state, colliders) 
   if(track.id==='abyss_dock') abyss(root,track,rnd,state,b,floor,colliders);
   b.flush();
 }
+
+// Shared construction primitives; exporting them does not change the expedition worlds.
+export { standard, glow, yaw, at, mesh, batcher, clearOfRoad, fascia, sign, atmosphere };

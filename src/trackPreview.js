@@ -23,12 +23,24 @@ const THEMES = {
   space:   { bg: '#0f1024', road: '#8f8fd8', edge: '#d8d8ff', accent: '#c08aff' },
   ARENA:   { bg: '#241428', road: '#d0a0e0', edge: '#f0d8ff', accent: '#ff5df1' },
 };
+// ID-specific colours mirror the refined worlds, without re-theming siblings.
+const REFINED_PALETTES = {
+  forge_line: { bg: '#252d3b', road: '#a6aab1', edge: '#ffe1b4', accent: '#ffc778' },
+  skyreach: { bg: '#386d96', road: '#bfdcd9', edge: '#fff3d3', accent: '#ffdf99' },
+  ruins_of_vael: { bg: '#294e49', road: '#afbd99', edge: '#e2f0c5', accent: '#9cdbb3' },
+  sandstone_crown: { bg: '#694939', road: '#d6aa79', edge: '#ffdf9b', accent: '#e9a485' },
+  tempest_ridge: { bg: '#293e52', road: '#9bb5c3', edge: '#ffe9bc', accent: '#ffd791' },
+  glimmer_deep: { bg: '#202941', road: '#88bbc7', edge: '#b1ffe8', accent: '#c3a6eb' },
+  orbital_ring: { bg: '#132844', road: '#9abace', edge: '#befff5', accent: '#90f5ed' },
+  void_terminal: { bg: '#292139', road: '#b4a3cc', edge: '#efd6ff', accent: '#e3b3ff' },
+};
 const DEFAULT_THEME = THEMES.desert;
 
 const PAD = 12;
 const _cache = new Map();          // `${id}@${w}x${h}` -> canvas
 
 function paletteFor(def) {
+  if (REFINED_PALETTES[def?.id]) return REFINED_PALETTES[def.id];
   if (def?.id === 'granite_pass') return { bg: '#203f4b', road: '#99b5bd', edge: '#fff1d4', accent: '#cc7847' };
   if (def?.id === 'abyss_dock') return { bg: '#103344', road: '#6bc1c5', edge: '#d8fff2', accent: '#32aab1' };
   return THEMES[def?.theme] || DEFAULT_THEME;
