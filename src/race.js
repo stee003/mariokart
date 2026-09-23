@@ -216,9 +216,13 @@ export class RaceManager {
         const rvx = b.vel.x - a.vel.x, rvz = b.vel.z - a.vel.z;
         const relN = rvx * nx + rvz * nz;
         if (relN < 0) {
-          const jimp = -(1 + rest) * relN * 0.5;
-          a.vel.x -= nx * jimp; a.vel.z -= nz * jimp;
-          b.vel.x += nx * jimp; b.vel.z += nz * jimp;
+          // Mass-weighted impulse: with equal masses this is exactly the
+          // original even-split impulse from the vertical slice.
+          const ma = a.massFactor ?? 1, mb = b.massFactor ?? 1;
+          const invA = 1 / ma, invB = 1 / mb;
+          const jimp = -(1 + rest) * relN / (invA + invB);
+          a.vel.x -= nx * jimp * invA; a.vel.z -= nz * jimp * invA;
+          b.vel.x += nx * jimp * invB; b.vel.z += nz * jimp * invB;
           const strength = Math.min(2, Math.abs(relN) / 8);
           if (strength > 0.15) {
             this.audio.collision(strength);
@@ -250,10 +254,11 @@ export class RaceManager {
         v.pos.z = c.z + nz * minD;
         const relN = v.vel.x * -nx + v.vel.z * -nz;
         if (relN > 0) {
-          // moving into the obstacle: bounce
+          // moving into the obstacle: bounce (heavier karts shrug it off more)
           const rest = 0.55;
-          v.vel.x += nx * relN * (1 + rest);
-          v.vel.z += nz * relN * (1 + rest);
+          const massScale = 1 / (v.massFactor ?? 1);
+          v.vel.x += nx * relN * (1 + rest) * massScale;
+          v.vel.z += nz * relN * (1 + rest) * massScale;
         }
         this.audio.collision(1.2);
         this.onEvent && this.onEvent('obstacleHit', {
