@@ -19,6 +19,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
+import { REFINEMENT_KITS, buildRefinedEnvironment } from './refinedEnvironment.js';
 import { EXPEDITION_KITS, buildExpeditionEnvironment } from './expeditionEnvironment.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -1403,16 +1404,18 @@ const FLAVORS = {
 export function buildThemedEnvironment(scene, track, bannerName) {
   const theme = track.def.theme;
   const expedition = EXPEDITION_KITS[track.def.id];
-  const kit = expedition || KITS[theme] || KITS.ruins;
+  const refinement = REFINEMENT_KITS[track.def.id];
+  const bespoke = expedition || refinement;
+  const kit = bespoke || KITS[theme] || KITS.ruins;
   const group = new THREE.Group();
   const colliders = [];
   const state = { padMaterials: [], obstacleMeshes: [], extras: [] };
   scene.add(group);
 
-  // Legacy worlds attach lights directly to the scene. Isolate the three new
+  // Legacy worlds attach lights directly to the scene. Isolate the bespoke
   // palettes from those lights while active, then restore the exact old state.
   // New lights belong to the disposable world group and cannot leak on exit.
-  const previousLights = expedition
+  const previousLights = bespoke
     ? scene.children.filter(o => o.isLight).map(light => ({ light, visible: light.visible })) : [];
   for (const { light } of previousLights) light.visible = false;
   const sunLight = buildSky(scene, group, kit);
@@ -1432,12 +1435,13 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   buildRoad(group, track, kit);
   buildFinishAndBanner(group, track, bannerName || 'SUNFORGE', kit);
   buildRampsAndPads(group, track, state);
-  if (!expedition) buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
-  if (!expedition) buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
+  if (!bespoke) buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
+  if (!bespoke) buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
   buildObstacles(group, track, state);
 
   const rnd = seeded(track.def.musicSeed * 1013 + 7);
   if (expedition) buildExpeditionEnvironment(group, track, rnd, state, colliders);
+  else if (refinement) buildRefinedEnvironment(group, track, rnd, state, colliders);
   else (PROPS[theme] || PROPS.ruins)(group, track, rnd);
 
   // signature landmarks for the four flagship themed circuits
@@ -1455,7 +1459,7 @@ export function buildThemedEnvironment(scene, track, bannerName) {
     }
     const pulse = 0.75 + Math.sin(time * 6) * 0.25;
     for (const m of state.padMaterials) m.opacity = pulse;
-    if (theme === 'storm') {
+    if (theme === 'storm' && !refinement) {
       // lightning flicker
       const flash = Math.max(0, Math.sin(time * 1.7) * Math.sin(time * 7.3) - 0.93) * 12;
       sunLight.intensity = kit.sun[1] + flash;

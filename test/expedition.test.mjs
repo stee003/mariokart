@@ -6,18 +6,22 @@ import * as THREE from '../lib/three.module.js';
 import { TRACK_DEFS } from '../src/content/trackDefs.js';
 import { TrackManager } from '../src/track.js';
 import { MusicManager, buildTheme } from '../src/music.js';
+import { REFINEMENT_MUSIC } from '../src/content/refinementMusic.js';
 import { EXPEDITION_KITS } from '../src/expeditionEnvironment.js';
 import { buildThemedEnvironment } from '../src/environment2.js';
 
 const ids = ['granite_pass', 'magma_coil', 'abyss_dock'];
 const untouched = JSON.parse(readFileSync(new URL('./fixtures/untouched-track-hashes.json', import.meta.url)));
 assert.deepEqual(Object.keys(EXPEDITION_KITS), ids, 'art direction is scoped by ID');
+// Keep the historical fixture intact. The eight explicitly requested tracks
+// now have their own regression suite; all remaining historical hashes apply.
 for (const [id, hash] of Object.entries(untouched)) {
+  if (REFINEMENT_MUSIC[id]) continue;
   const def = TRACK_DEFS.find(d => d.id === id);
   assert.equal(createHash('sha256').update(JSON.stringify(def)).digest('hex'), hash, `${id} content unchanged`);
 }
 assert.equal(Object.keys(untouched).length, TRACK_DEFS.length - 3);
-console.log('PASS all 13 other track definitions match their pre-pass fingerprints');
+console.log('PASS non-superseded definitions match their original pre-pass fingerprints');
 
 const ctx = new Proxy({}, { get: (_, key) => key.startsWith('create') ? () => ({ addColorStop() {} }) : () => {} });
 global.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) };

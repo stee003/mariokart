@@ -1,3 +1,4 @@
+import { REFINEMENT_MUSIC } from './refinementMusic.js';
 import { EXPEDITION_MUSIC } from './expeditionMusic.js';
 
 // ============================================================================
@@ -468,20 +469,22 @@ export const TRACK_DEFS = [
     id: 'forge_line', nameKey: 'track.forge', theme: 'factory',
     teachKey: 'track.forge.teach', mechanicKey: 'track.forge.mechanic',
     musicSeed: 83, laps: 3, difficulty: 4,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -210, y: 0, z: -130, w: 20 },
-      { x: 30,  y: 0, z: -130, w: 18 },
-      { x: 190, y: 0, z: -110, w: 14 },
-      { x: 220, y: 2, z: 10,   w: 13 },
-      { x: 130, y: 3, z: 70,   w: 12.5 },   // press alley
-      { x: 210, y: 4, z: 140,  w: 12.5 },
-      { x: 60,  y: 3, z: 175,  w: 13.5 },
-      { x: -90, y: 2, z: 140,  w: 13 },
-      { x: -140, y: 1, z: 40,  w: 13 },     // conveyor chicane
-      { x: -230, y: 0, z: -20, w: 15 },
+      { x: -210, y: 0, z: -130, w: 22 },
+      { x: 30,  y: 0, z: -130, w: 20 },
+      { x: 190, y: 0, z: -110, w: 16 },
+      { x: 220, y: 2, z: 10,   w: 15 },
+      { x: 160, y: 3, z: 80,   w: 14.5 },   // press alley
+      { x: 160, y: 4, z: 150,  w: 14.5 },
+      { x: 60,  y: 3, z: 175,  w: 15.5 },
+      { x: -90, y: 2, z: 140,  w: 15 },
+      { x: -140, y: 1, z: 40,  w: 15 },     // conveyor chicane
+      { x: -230, y: 0, z: -20, w: 17 },
     ],
-    ramps: [{ f: 0.44, len: 9, lat: 0, halfW: 3.4, rise: 2.0 }],
+    ramps: [{ f: 0.54, len: 12, lat: 0, halfW: 4.2, rise: 1.8 }],
     pads: [
+      { f: 0.46, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.09, lat: 0, halfW: 2.5, len: 5 },
       { f: 0.62, lat: 0, halfW: 2.4, len: 5 },
       { f: 0.93, lat: 0, halfW: 2.5, len: 5 },
@@ -489,13 +492,14 @@ export const TRACK_DEFS = [
     checkpoints: [0, 0.10, 0.22, 0.34, 0.47, 0.59, 0.72, 0.85, 0.94],
     cpExtras: { 0: 6 },
     obstacles: [
-      { type: 'pendulum', s: 0.375, lat: -1.5, swing: 4.8, speed: 1.35, radius: 1.5 },
-      { type: 'pendulum', s: 0.405, lat: 1.5, swing: 4.8, speed: 1.35, phase: 1.6, radius: 1.5 },
-      { type: 'slider', s: 0.79, ampExtra: 0.6, speed: 2.4, radius: 1.4 },
+      { type: 'pendulum', s: 0.375, lat: -2.8, swing: 4.0, speed: 1.15, radius: 1.5 },
+      { type: 'pendulum', s: 0.405, lat: 2.8, swing: 4.0, speed: 1.15, phase: 1.6, radius: 1.5 },
+      { type: 'slider', s: 0.71, ampExtra: 0.3, speed: 2.0, radius: 1.4 },
     ],
-    zones: [{ f0: 0.74, f1: 0.86, type: 'current', v: 4.0 }],  // conveyor belt
+    zones: [{ f0: 0.74, f1: 0.86, type: 'current', v: 3.4 }],  // conveyor belt
     boxes: [0.05, 0.26, 0.50, 0.70, 0.88],
     ranges: { tunnel: [0.13, 0.19] },
+    music: REFINEMENT_MUSIC.forge_line,
   },
 
   // ----------------------------------------------------------- floating isles
@@ -503,23 +507,25 @@ export const TRACK_DEFS = [
     id: 'skyreach', nameKey: 'track.skyreach', theme: 'islands',
     teachKey: 'track.skyreach.teach', mechanicKey: 'track.skyreach.mechanic',
     musicSeed: 97, laps: 3, difficulty: 3,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -180, y: 0, z: -110, w: 18 },
-      { x: -20, y: 2, z: -140, w: 15 },
-      { x: 120, y: 8, z: -120, w: 13 },     // island hop climb
-      { x: 200, y: 14, z: -30, w: 12 },
-      { x: 150, y: 10, z: 80,  w: 12 },
-      { x: 20,  y: 6, z: 60,   w: 12.5 },
-      { x: -60, y: 12, z: 130, w: 12 },
-      { x: -190, y: 16, z: 110, w: 12.5 },
-      { x: -240, y: 8, z: 10,  w: 14 },
+      { x: -180, y: 0, z: -110, w: 20 },
+      { x: -20, y: 2, z: -140, w: 17 },
+      { x: 120, y: 8, z: -120, w: 15 },     // island hop climb
+      { x: 200, y: 14, z: -30, w: 14 },
+      { x: 150, y: 10, z: 80,  w: 14 },
+      { x: 20,  y: 8, z: 78,   w: 14.5 },
+      { x: -60, y: 12, z: 130, w: 14 },
+      { x: -190, y: 14, z: 110, w: 14.5 },
+      { x: -240, y: 8, z: 10,  w: 16 },
     ],
     ramps: [
-      { f: 0.16, len: 12, lat: 0, halfW: 4.0, rise: 3.0 },
-      { f: 0.48, len: 10, lat: 0, halfW: 3.6, rise: 2.6 },
-      { f: 0.66, len: 10, lat: 0, halfW: 3.6, rise: 2.8 },
+      { f: 0.16, len: 15, lat: 0, halfW: 4.5, rise: 2.4 },
+      { f: 0.49, len: 14, lat: 0, halfW: 4.2, rise: 2.2 },
+      { f: 0.70, len: 14, lat: 0, halfW: 4.2, rise: 2.3 },
     ],
     pads: [
+      { f: 0.77, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.10, lat: 0, halfW: 2.4, len: 5 },
       { f: 0.40, lat: 0, halfW: 2.3, len: 4.5 },
       { f: 0.90, lat: 0, halfW: 2.5, len: 5 },
@@ -530,6 +536,7 @@ export const TRACK_DEFS = [
     zones: [{ f0: 0.30, f1: 0.46, type: 'lowgrav', v: 0.6 }],   // updraft between isles
     boxes: [0.06, 0.32, 0.58, 0.84],
     ranges: {},
+    music: REFINEMENT_MUSIC.skyreach,
   },
 
   // ------------------------------------------------------------- ancient ruins
@@ -537,49 +544,55 @@ export const TRACK_DEFS = [
     id: 'ruins_of_vael', nameKey: 'track.vael', theme: 'ruins',
     teachKey: 'track.vael.teach', mechanicKey: 'track.vael.mechanic',
     musicSeed: 101, laps: 3, difficulty: 2,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -170, y: 0, z: -130, w: 22 },
-      { x: 30,  y: 0, z: -150, w: 19 },
-      { x: 180, y: 1, z: -100, w: 14 },    // colonnade right angle
-      { x: 190, y: 2, z: 30,   w: 13 },
-      { x: 100, y: 3, z: 90,   w: 12.5 },
-      { x: 150, y: 4, z: 170,  w: 13 },
-      { x: 0,   y: 3, z: 190,  w: 13.5 },
-      { x: -110, y: 2, z: 130, w: 12.5 },
-      { x: -60, y: 1, z: 40,   w: 12 },    // temple chicane
-      { x: -160, y: 0, z: -20, w: 14 },
+      { x: -170, y: 0, z: -130, w: 24 },
+      { x: 30,  y: 0, z: -150, w: 21 },
+      { x: 180, y: 1, z: -100, w: 16 },    // colonnade right angle
+      { x: 190, y: 2, z: 30,   w: 15 },
+      { x: 125, y: 3, z: 94,   w: 14.5 },
+      { x: 140, y: 4, z: 174,  w: 15 },
+      { x: 0,   y: 3, z: 190,  w: 15.5 },
+      { x: -110, y: 2, z: 130, w: 14.5 },
+      { x: -85, y: 1, z: 40,   w: 14 },    // temple chicane
+      { x: -160, y: 0, z: -20, w: 16 },
     ],
-    shortcut: { entry: 0.60, exit: 0.70, latEntry: -2.8, latExit: -3.0, halfW: 3.2 },
-    ramps: [{ f: 0.25, len: 9, lat: 0, halfW: 3.4, rise: 1.7 }],
+    shortcut: { entry: 0.60, exit: 0.70, latEntry: -2.8, latExit: -3.0, halfW: 3.8 },
+    shortcutPads: [0.52],
+    ramps: [{ f: 0.25, len: 12, lat: 0, halfW: 4.2, rise: 1.8 }],
     pads: [
+      { f: 0.73, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.09, lat: 0, halfW: 2.5, len: 5 },
       { f: 0.50, lat: 0, halfW: 2.4, len: 5 },
       { f: 0.92, lat: 0, halfW: 2.5, len: 5 },
     ],
     checkpoints: [0, 0.10, 0.22, 0.34, 0.46, 0.58, 0.70, 0.82, 0.92, 0.965],
     cpExtras: { 0: 6, 6: 12 },
-    obstacles: [{ type: 'gear', s: 0.775, lat: 0, armRadius: 5.0, speed: 0.9 }],
+    obstacles: [{ type: 'gear', s: 0.81, lat: -2.6, armRadius: 4.5, speed: 0.9 }],
     zones: [],
-    boxes: [0.05, 0.27, 0.48, 0.66, 0.85],
+    boxes: [0.05, 0.27, 0.48, 0.66, 0.89],
     ranges: { tunnel: [0.35, 0.41] },
+    music: REFINEMENT_MUSIC.ruins_of_vael,
   },
 
   {
     id: 'sandstone_crown', nameKey: 'track.crown', theme: 'ruins',
     teachKey: 'track.crown.teach', mechanicKey: 'track.crown.mechanic',
     musicSeed: 103, laps: 3, difficulty: 5,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -140, y: 0, z: -140, w: 20 },
-      { x: 60,  y: 0, z: -140, w: 16 },
-      { x: 160, y: 2, z: -60, w: 13 },
-      { x: 130, y: 4, z: 60,  w: 12 },     // amphitheatre bowl
-      { x: 20,  y: 5, z: 110, w: 11.5 },
-      { x: -80, y: 5, z: 70,  w: 11.5 },
-      { x: -40, y: 4, z: -10, w: 11 },     // infield thread
-      { x: -120, y: 3, z: -50, w: 11.5 },
+      { x: -140, y: 0, z: -140, w: 22 },
+      { x: 60,  y: 0, z: -140, w: 18 },
+      { x: 160, y: 2, z: -60, w: 15 },
+      { x: 130, y: 4, z: 60,  w: 14 },     // amphitheatre bowl
+      { x: 20,  y: 5, z: 110, w: 13.5 },
+      { x: -100, y: 5, z: 72,  w: 13.5 },
+      { x: -65, y: 4, z: -8, w: 13 },     // infield thread
+      { x: -145, y: 2, z: -62, w: 13.5 },
     ],
-    ramps: [{ f: 0.14, len: 9, lat: 0, halfW: 3.2, rise: 1.8 }],
+    ramps: [{ f: 0.14, len: 12, lat: 0, halfW: 4.0, rise: 1.9 }],
     pads: [
+      { f: 0.63, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.07, lat: 0, halfW: 2.4, len: 4.5 },
       { f: 0.52, lat: 0, halfW: 2.2, len: 4.5 },
       { f: 0.94, lat: 0, halfW: 2.4, len: 4.5 },
@@ -587,12 +600,13 @@ export const TRACK_DEFS = [
     checkpoints: [0, 0.13, 0.27, 0.42, 0.57, 0.72, 0.87, 0.955],
     cpExtras: { 0: 6 },
     obstacles: [
-      { type: 'pendulum', s: 0.35, lat: 0, swing: 4.6, speed: 1.25, radius: 1.3 },
-      { type: 'slider', s: 0.79, ampExtra: 0.5, speed: 2.7, radius: 1.3 },
+      { type: 'pendulum', s: 0.37, lat: 2.4, swing: 4.0, speed: 1.15, radius: 1.3 },
+      { type: 'slider', s: 0.82, ampExtra: 0.2, speed: 2.2, radius: 1.3 },
     ],
     zones: [],
-    boxes: [0.05, 0.33, 0.62, 0.85],
+    boxes: [0.04, 0.29, 0.58, 0.91],
     ranges: {},
+    music: REFINEMENT_MUSIC.sandstone_crown,
   },
 
   // -------------------------------------------------------------- storm world
@@ -600,18 +614,20 @@ export const TRACK_DEFS = [
     id: 'tempest_ridge', nameKey: 'track.tempest', theme: 'storm',
     teachKey: 'track.tempest.teach', mechanicKey: 'track.tempest.mechanic',
     musicSeed: 113, laps: 3, difficulty: 4,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -230, y: 0, z: -120, w: 20 },
-      { x: 0,   y: 2, z: -150, w: 17 },
-      { x: 200, y: 6, z: -110, w: 14 },
-      { x: 260, y: 10, z: 20,  w: 13 },    // exposed ridge (wind!)
-      { x: 170, y: 12, z: 130, w: 12.5 },
-      { x: 0,   y: 9, z: 160,  w: 13 },
-      { x: -150, y: 6, z: 120, w: 13.5 },  // second ridge
-      { x: -260, y: 3, z: 10,  w: 15 },
+      { x: -230, y: 0, z: -120, w: 22 },
+      { x: 0,   y: 2, z: -150, w: 19 },
+      { x: 200, y: 6, z: -110, w: 16 },
+      { x: 270, y: 10, z: 24,  w: 15 },    // exposed ridge (wind!)
+      { x: 170, y: 12, z: 130, w: 14.5 },
+      { x: 0,   y: 9, z: 160,  w: 15 },
+      { x: -150, y: 6, z: 120, w: 15.5 },  // second ridge
+      { x: -260, y: 3, z: 10,  w: 17 },
     ],
-    ramps: [{ f: 0.42, len: 11, lat: 0, halfW: 3.8, rise: 2.4 }],
+    ramps: [{ f: 0.51, len: 14, lat: 0, halfW: 4.4, rise: 2.2 }],
     pads: [
+      { f: 0.85, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.09, lat: 0, halfW: 2.5, len: 5 },
       { f: 0.62, lat: 0, halfW: 2.4, len: 5 },
       { f: 0.93, lat: 0, halfW: 2.5, len: 5 },
@@ -620,11 +636,12 @@ export const TRACK_DEFS = [
     cpExtras: { 0: 6 },
     obstacles: [],
     zones: [
-      { f0: 0.30, f1: 0.46, type: 'wind', v: 5.0 },     // crosswind right -> left
-      { f0: 0.66, f1: 0.80, type: 'wind', v: -4.0 },    // and back
+      { f0: 0.30, f1: 0.46, type: 'wind', v: 4.2 },     // crosswind right -> left
+      { f0: 0.66, f1: 0.80, type: 'wind', v: -3.4 },    // and back
     ],
-    boxes: [0.05, 0.30, 0.55, 0.80],
+    boxes: [0.05, 0.26, 0.58, 0.84],
     ranges: {},
+    music: REFINEMENT_MUSIC.tempest_ridge,
   },
 
   // ------------------------------------------------------------ crystal caves
@@ -632,33 +649,37 @@ export const TRACK_DEFS = [
     id: 'glimmer_deep', nameKey: 'track.glimmer', theme: 'crystal',
     teachKey: 'track.glimmer.teach', mechanicKey: 'track.glimmer.mechanic',
     musicSeed: 127, laps: 3, difficulty: 3,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -160, y: 0, z: -100, w: 18 },
-      { x: 10,  y: -2, z: -130, w: 16 },
-      { x: 150, y: -4, z: -80, w: 13 },
-      { x: 185, y: -5, z: 40,  w: 12.5 },
-      { x: 90,  y: -6, z: 110, w: 12 },
-      { x: -30, y: -7, z: 60,  w: 11.5 },  // crystal chicane
-      { x: -110, y: -6, z: 130, w: 12 },
-      { x: -210, y: -4, z: 60,  w: 13 },
-      { x: -215, y: -2, z: -40, w: 14 },
+      { x: -160, y: 0, z: -100, w: 20 },
+      { x: 10,  y: -2, z: -130, w: 18 },
+      { x: 150, y: -4, z: -80, w: 15 },
+      { x: 185, y: -5, z: 40,  w: 14.5 },
+      { x: 90,  y: -6, z: 110, w: 14 },
+      { x: -30, y: -6.5, z: 80,  w: 13.5 },  // crystal chicane
+      { x: -110, y: -6, z: 130, w: 14 },
+      { x: -210, y: -4, z: 60,  w: 15 },
+      { x: -215, y: -2, z: -40, w: 16 },
     ],
-    shortcut: { entry: 0.48, exit: 0.58, latEntry: 2.4, latExit: 2.6, halfW: 3.0 },
+    shortcut: { entry: 0.48, exit: 0.58, latEntry: 2.4, latExit: 2.6, halfW: 3.6 },
+    shortcutPads: [0.52],
     ramps: [
-      { f: 0.20, len: 9, lat: 0, halfW: 3.4, rise: 2.6 },   // crystal spring (tall hop)
-      { f: 0.72, len: 8, lat: 0, halfW: 3.2, rise: 2.2 },
+      { f: 0.20, len: 14, lat: 0, halfW: 4.1, rise: 2.3 },   // crystal spring (tall hop)
+      { f: 0.72, len: 13, lat: 0, halfW: 4.0, rise: 2.1 },
     ],
     pads: [
+      { f: 0.46, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.10, lat: 0, halfW: 2.3, len: 4.5 },
       { f: 0.62, lat: 0, halfW: 2.3, len: 4.5 },
       { f: 0.92, lat: 0, halfW: 2.4, len: 4.5 },
     ],
     checkpoints: [0, 0.12, 0.25, 0.38, 0.51, 0.64, 0.77, 0.90, 0.96],
     cpExtras: { 0: 6, 5: 11 },
-    obstacles: [{ type: 'gear', s: 0.84, lat: -1.0, armRadius: 4.4, speed: 1.2 }],
+    obstacles: [{ type: 'gear', s: 0.85, lat: -2.6, armRadius: 4.2, speed: 1.05 }],
     zones: [],
     boxes: [0.06, 0.30, 0.54, 0.78],
     ranges: { tunnel: [0.30, 0.44] },
+    music: REFINEMENT_MUSIC.glimmer_deep,
   },
 
   // ------------------------------------------------------------ space station
@@ -666,18 +687,20 @@ export const TRACK_DEFS = [
     id: 'orbital_ring', nameKey: 'track.orbital', theme: 'space',
     teachKey: 'track.orbital.teach', mechanicKey: 'track.orbital.mechanic',
     musicSeed: 131, laps: 3, difficulty: 2,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -220, y: 0, z: -140, w: 24 },
-      { x: 40,  y: 0, z: -170, w: 22 },
-      { x: 240, y: 3, z: -90, w: 17 },
-      { x: 280, y: 6, z: 80,  w: 15 },
-      { x: 120, y: 8, z: 190, w: 15 },
-      { x: -100, y: 8, z: 210, w: 15 },
-      { x: -260, y: 5, z: 110, w: 16 },
-      { x: -290, y: 2, z: -30, w: 18 },
+      { x: -220, y: 0, z: -140, w: 26 },
+      { x: 40,  y: 0, z: -170, w: 24 },
+      { x: 240, y: 3, z: -90, w: 19 },
+      { x: 292, y: 6, z: 84,  w: 17 },
+      { x: 120, y: 8, z: 190, w: 17 },
+      { x: -100, y: 8, z: 210, w: 17 },
+      { x: -260, y: 5, z: 110, w: 18 },
+      { x: -290, y: 2, z: -30, w: 20 },
     ],
-    ramps: [{ f: 0.40, len: 12, lat: 0, halfW: 4.0, rise: 2.2 }],
+    ramps: [{ f: 0.45, len: 15, lat: 0, halfW: 4.8, rise: 2.2 }],
     pads: [
+      { f: 0.67, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.10, lat: 3, halfW: 2.5, len: 6 },
       { f: 0.10, lat: -3, halfW: 2.5, len: 6 },
       { f: 0.55, lat: 0, halfW: 2.6, len: 6 },
@@ -687,31 +710,35 @@ export const TRACK_DEFS = [
     cpExtras: { 0: 6 },
     obstacles: [],
     zones: [{ f0: 0.44, f1: 0.62, type: 'lowgrav', v: 0.45 }],   // hull breach low-g
-    boxes: [0.06, 0.26, 0.50, 0.74, 0.92],
+    boxes: [0.06, 0.26, 0.53, 0.74, 0.95],
     ranges: {},
+    music: REFINEMENT_MUSIC.orbital_ring,
   },
 
   {
     id: 'void_terminal', nameKey: 'track.void', theme: 'space',
     teachKey: 'track.void.teach', mechanicKey: 'track.void.mechanic',
     musicSeed: 137, laps: 3, difficulty: 5,
+    // Refined pass: +2m physical width, rounded transitions and recovery space.
     points: [
-      { x: -180, y: 0, z: -130, w: 18 },
-      { x: 20,  y: 1, z: -155, w: 16 },
-      { x: 170, y: 4, z: -95, w: 13 },
-      { x: 190, y: 8, z: 40,  w: 12 },
-      { x: 80,  y: 10, z: 110, w: 11.5 },
-      { x: -30, y: 8, z: 50,  w: 11.5 },   // docking chicane
-      { x: -110, y: 10, z: 130, w: 12 },
-      { x: -220, y: 6, z: 60,  w: 13 },
-      { x: -230, y: 2, z: -50, w: 14 },
+      { x: -180, y: 0, z: -130, w: 20 },
+      { x: 20,  y: 1, z: -155, w: 18 },
+      { x: 170, y: 4, z: -95, w: 15 },
+      { x: 190, y: 8, z: 40,  w: 14 },
+      { x: 80,  y: 10, z: 110, w: 13.5 },
+      { x: -30, y: 8, z: 76,  w: 13.5 },   // docking chicane
+      { x: -110, y: 10, z: 130, w: 14 },
+      { x: -220, y: 6, z: 60,  w: 15 },
+      { x: -230, y: 2, z: -50, w: 16 },
     ],
-    shortcut: { entry: 0.62, exit: 0.73, latEntry: -2.5, latExit: -2.8, halfW: 3.0 },
+    shortcut: { entry: 0.62, exit: 0.73, latEntry: -2.5, latExit: -2.8, halfW: 3.6 },
+    shortcutPads: [0.52],
     ramps: [
-      { f: 0.30, len: 10, lat: 0, halfW: 3.5, rise: 2.5 },
-      { f: 0.80, len: 9, lat: 0, halfW: 3.3, rise: 2.0 },
+      { f: 0.30, len: 14, lat: 0, halfW: 4.2, rise: 2.3 },
+      { f: 0.80, len: 13, lat: 0, halfW: 4.0, rise: 2.0 },
     ],
     pads: [
+      { f: 0.83, lat: 0, halfW: 2.7, len: 5.5 },
       { f: 0.09, lat: 0, halfW: 2.4, len: 5 },
       { f: 0.50, lat: 0, halfW: 2.3, len: 4.5 },
       { f: 0.94, lat: 0, halfW: 2.4, len: 5 },
@@ -719,12 +746,13 @@ export const TRACK_DEFS = [
     checkpoints: [0, 0.11, 0.24, 0.37, 0.50, 0.63, 0.76, 0.89, 0.96],
     cpExtras: { 0: 6, 7: 12 },
     obstacles: [
-      { type: 'gear', s: 0.44, lat: 0.8, armRadius: 4.8, speed: 1.05 },
-      { type: 'flamejet', s: 0.90, lat: 0, period: 2.4, duty: 0.45, radius: 2.3 },
+      { type: 'gear', s: 0.54, lat: 2.8, armRadius: 4.4, speed: 1.05 },
+      { type: 'flamejet', s: 0.89, lat: -3.2, period: 3.0, duty: 0.36, radius: 2.3 },
     ],
     zones: [{ f0: 0.33, f1: 0.47, type: 'lowgrav', v: 0.5 }],
-    boxes: [0.05, 0.28, 0.52, 0.75, 0.92],
+    boxes: [0.05, 0.26, 0.60, 0.75, 0.96],
     ranges: { tunnel: [0.17, 0.23] },
+    music: REFINEMENT_MUSIC.void_terminal,
   },
 ];
 
