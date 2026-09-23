@@ -12,7 +12,8 @@ import { InputManager } from './input.js';
 import { AudioManager } from './audio.js';
 import { TrackManager } from './track.js';
 import { buildEnvironment } from './environment.js';
-import { buildKart, updateKartVisual } from './kartMesh.js';
+import { buildKart, buildKartFromLoadout, updateKartVisual } from './kartMesh.js';
+import { animateCharacter } from './characterMesh.js';
 import { VehicleController } from './vehicle.js';
 import { AIController } from './ai.js';
 import { CameraController } from './camera.js';
@@ -20,6 +21,9 @@ import { RaceManager } from './race.js';
 import { HUDManager } from './hud.js';
 import { ParticlePool } from './particles.js';
 import { DRIFT_COLORS } from './drift.js';
+import { ItemSystem } from './items.js';
+import { ItemVisuals } from './itemMesh.js';
+import { ITEMS } from './content/items.js';
 
 const FIXED_DT = 1 / 60;
 
@@ -56,6 +60,17 @@ class Game {
 
     this.hud = new HUDManager(this.i18n);
 
+    // items (power-ups) ---------------------------------------------------------
+    this.items = new ItemSystem({
+      track: this.track,
+      onEvent: (type, payload) => this.onRaceEvent(type, payload),
+      audio: this.audio,
+      i18n: this.i18n,
+    });
+    this.items.setBoxes(this.track.itemBoxes);
+    this.itemVisuals = new ItemVisuals(this.scene);
+    this.itemVisuals.setBoxes(this.items.boxes);
+
     // karts ---------------------------------------------------------------------
     this.kartVisuals = new Map();
     const defs = [
@@ -66,6 +81,7 @@ class Game {
     ];
     this.race = new RaceManager({
       track: this.track, hud: this.hud, audio: this.audio, i18n: this.i18n,
+      items: this.items,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
     for (const def of defs) {
@@ -79,6 +95,7 @@ class Game {
         ai: def.ai ? new AIController(vehicle, this.track, def.ai) : null,
         nameKey: def.nameKey,
         isPlayer: def.ai === null,
+        charVis: vis.charVis || null,
       };
       this.race.registerKart(kart);
     }
@@ -145,6 +162,16 @@ class Game {
       this.audio.init();
       this.audio.setVolume(parseFloat(e.target.value));
     });
+
+    // power-ups toggle
+    const syncItems = () => {
+      const on = this.save.get('itemsEnabled', true);
+      $('items-on').classList.toggle('selected', on);
+      $('items-off').classList.toggle('selected', !on);
+    };
+    $('items-on').addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set('itemsEnabled', true); syncItems(); });
+    $('items-off').addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set('itemsEnabled', false); syncItems(); });
+    syncItems();
   }
 
   openSettings() { this.hud.showScreen('screen-settings'); }
@@ -154,7 +181,10 @@ class Game {
     this.hud.hideScreens();
     this.hud.showHUD(true);
     this.audio.resume();
+    this.race.itemsEnabled = this.save.get('itemsEnabled', true) && !!this.race.items;
     this.race.restart();
+    this.hud.setItem(null);
+    for (const m of this.itemVisuals.boxMeshes) m.visible = this.race.itemsEnabled;
     this.camCtl.snapTo(this.playerKart.vehicle);
     this.accumulator = 0;
   }
@@ -164,8 +194,12 @@ class Game {
     this.race.state = 'idle';
     this.race.paused = false;
     this.hud.showHUD(false);
+    this.hud.setItem(null);
     this.hud.showScreen('screen-main');
     this.audio.stopEngine();
+    this.items.reset();
+    this.itemVisuals.update(0, this.time, this.items);
+    for (const m of this.itemVisuals.boxMeshes) m.visible = false;
     const grid = this.track.startGrid();
     this.race.karts.forEach((k, i) => k.vehicle.place(grid[i]));
   }
@@ -214,6 +248,9 @@ class Game {
           gravity: 1.5, drag: 0.4,
         });
       }
+    } else if (type === 'itemGet' || type === 'itemUse' || type === 'itemHit' || type === 'itemBlocked' ||
+               type === 'boxPickup' || type === 'cloneFlash' || type === 'tempestZap' || type === 'chronoRestore') {
+      this.onItemEvent(type, payload);
     } else if (type === 'landing') {
       const v = payload.vehicle;
       const n = Math.min(20, Math.floor(4 + payload.fall * 1.4));
@@ -225,6 +262,50 @@ class Game {
         ), { color: 0xd9b077, size: 0.55, life: 0.5 + Math.random() * 0.3, growth: 1.8, drag: 2.5 });
       }
       this.camCtl.addTrauma(Math.min(0.5, payload.fall * CONFIG.air.landingShakePerFallSpeed));
+    }
+  }
+
+  // ------------------------------------------------------------- item events
+  onItemEvent(type, payload) {
+    const player = this.playerKart;
+    if (type === 'itemGet') {
+      this.burstAt(payload.pos ?? payload.kart?.vehicle?.pos, 0x2fd8c8, 8);
+      if (payload.isPlayer) {
+        this.hud.setItem(payload.itemId);
+        this.hud.notify(this.i18n.t('race.gotItem', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
+      }
+    } else if (type === 'itemUse') {
+      if (payload.kart?.isPlayer) this.hud.setItem(this.items.heldItem(player));
+    } else if (type === 'itemHit') {
+      this.burstAt(payload.pos, ITEMS[payload.itemId]?.color ?? 0xffffff, 16);
+      this.camCtl.addTrauma(0.35);
+      if (payload.victim?.isPlayer) {
+        this.hud.setItem(null);
+        this.hud.notify(this.i18n.t('race.hitBy', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
+      } else if (payload.victim && !payload.kart?.isPlayer) {
+        const near = payload.pos && payload.pos.distanceTo(player.vehicle.pos) < 60;
+        if (near) this.hud.notify(this.i18n.t('race.youHit', { victim: this.i18n.t(payload.victim.nameKey) }));
+      }
+    } else if (type === 'itemBlocked') {
+      this.burstAt(payload.pos, 0x9a8aff, 14);
+      if (payload.victim?.isPlayer) this.hud.notify(this.i18n.t('race.itemBlocked'));
+    } else if (type === 'boxPickup') {
+      this.burstAt(payload.pos, 0xbaffec, 10);
+    } else if (type === 'cloneFlash' || type === 'tempestZap') {
+      this.burstAt(payload.pos, type === 'cloneFlash' ? 0xbaf0ff : 0x8ac8ff, 20);
+      this.camCtl.addTrauma(0.3);
+    } else if (type === 'chronoRestore') {
+      this.burstAt(payload.pos, 0xc8b0ff, 12);
+      this.hud.notify(this.i18n.t('race.chronoRestore'));
+    }
+  }
+
+  burstAt(pos, color, n) {
+    if (!pos) return;
+    for (let i = 0; i < n; i++) {
+      this.sparks.spawn(_pp.set(pos.x, pos.y + 0.5, pos.z), _pv.set(
+        (Math.random() - 0.5) * 7, Math.random() * 5 + 1, (Math.random() - 0.5) * 7,
+      ), { color, size: 0.34, life: 0.3 + Math.random() * 0.25, gravity: 8, drag: 2 });
     }
   }
 
@@ -325,8 +406,15 @@ class Game {
         // visuals
         for (const kart of this.race.karts) {
           updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time);
+          if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
         }
         this.perFrameFX(rawDt);
+
+        // item visuals + held-item slot
+        if (this.race.itemsEnabled) {
+          this.itemVisuals.update(rawDt, this.time, this.items);
+          this.hud.setItem(this.items.heldItem(this.playerKart));
+        }
 
         // player engine audio
         const pv = this.playerKart.vehicle;

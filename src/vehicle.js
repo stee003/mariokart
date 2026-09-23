@@ -48,6 +48,7 @@ export class VehicleController {
     this.climbRate = 0;
     this.lastFallSpeed = 0;
 
+    this.mods = null;                      // per-frame item-system modifiers
     this.fx = {};                          // per-frame FX event flags
   }
 
@@ -100,6 +101,10 @@ export class VehicleController {
 
     if (locked) input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
 
+    // Item-system modifiers (null when items are disabled).
+    const mods = this.mods;
+    if (mods && mods.noDrift) input = { ...input, drift: false };
+
     // --- surface at previous position (used for drag/limits this frame) ---
     const prevSurf = this.surf || track.surface(this.pos, this.hint);
 
@@ -111,9 +116,9 @@ export class VehicleController {
     const b = this.boost.update(dt);
 
     // --- engine / brakes / reverse -----------------------------------
-    const maxEff = this.params.maxSpeed * b.speedMult;
+    const maxEff = this.params.maxSpeed * b.speedMult * (mods?.speedMult ?? 1);
     if (input.throttle > 0) {
-      const accel = this.params.accel * (b.active ? b.accelMult : 1);
+      const accel = this.params.accel * (b.active ? b.accelMult : 1) * (mods?.accelMult ?? 1);
       if (fSpeed < maxEff) fSpeed += accel * dt * Math.max(0.35, 1 - Math.max(0, fSpeed) / maxEff);
       else fSpeed -= (fSpeed - maxEff) * 2.2 * dt;           // soft overspeed decay
     } else if (input.brake > 0) {
@@ -168,6 +173,10 @@ export class VehicleController {
       let steerAuth = drifting ? (this.driftMods?.steerMult ?? CONFIG.drift.steerMult) : 1;
       if (b.active) steerAuth *= CONFIG.boost.steerRetention;
       yawRate = this.steer * this.params.steerRate * speedFactor * highDamp * steerAuth * dirSign;
+      if (mods) {
+        yawRate *= mods.steerMult ?? 1;
+        if (mods.jitter) yawRate += (Math.random() - 0.5) * mods.jitter * 6;
+      }
       if (drifting) {
         yawRate += this.drift.dir * CONFIG.drift.driftStrength * Math.min(1, speedAbs / 16);
       }
@@ -178,6 +187,7 @@ export class VehicleController {
 
     // --- lateral grip -------------------------------------------------------
     let grip = onRoad ? this.params.traction : this.params.offTrackTraction;
+    if (mods?.gripMult) grip *= mods.gripMult;
     if (drifting) grip *= this.driftMods?.gripMult ?? CONFIG.drift.gripMult;
     latSpeed *= Math.exp(-grip * dt);
 

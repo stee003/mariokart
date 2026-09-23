@@ -6,6 +6,7 @@
 
 import { CONFIG } from './config.js';
 import { normalizeAngle } from './vehicle.js';
+import { ITEMS as ITEMS_BY_ID } from './content/items.js';
 
 const A = CONFIG.ai;
 
@@ -23,13 +24,14 @@ export class AIController {
     this.offRoadTimer = 0;
     this.stuckTimer = 0;
     this.seed = Math.random() * 1000;
+    this.itemCooldown = 1 + Math.random() * 2;
   }
 
   // Produces the same input shape the player's InputManager produces.
-  update(dt, karts, racing) {
+  update(dt, karts, racing, items = null) {
     const v = this.vehicle;
     const track = this.track;
-    const input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
+    const input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false, item: false };
     if (!v.surf) return input;
     if (!racing) {
       input.throttle = 0;
@@ -123,6 +125,19 @@ export class AIController {
     // --- tricks in the air ----------------------------------------------------
     if (!v.grounded && v.airTime > 0.15 && Math.random() < 0.025) input.trick = true;
 
+    // --- item usage (heuristic, no raw-speed cheating) ------------------------
+    this.itemCooldown -= dt;
+    if (items && this.itemCooldown <= 0) {
+      const heldId = items.heldItem({ vehicle: v });
+      if (heldId) {
+        const def = ITEMS_BY_ID[heldId];
+        if (def && this._shouldUseItem(def, karts, v, track, s)) {
+          input.item = true;
+          this.itemCooldown = 2.2 + Math.random() * 2.6;
+        }
+      }
+    }
+
     // --- recovery -------------------------------------------------------------
     const off = v.surf && !v.surf.onRoad && !v.surf.onShoulder;
     if (off) this.offRoadTimer += dt; else this.offRoadTimer = 0;
@@ -134,5 +149,65 @@ export class AIController {
     }
 
     return input;
+  }
+
+  // Heuristic decision: should the AI fire the held item now?
+  // Skill-flavored but never unfair - it only chooses WHEN to use an item
+  // the roulette already gave it.
+  _shouldUseItem(def, karts, v, track, s) {
+    const eag = this.p.boostUse;   // reuse boost-usage as item eagerness
+    const fwdX = Math.sin(v.yaw), fwdZ = Math.cos(v.yaw);
+
+    const aheadDist = () => {
+      let best = Infinity, any = false;
+      for (const other of karts) {
+        if (other.vehicle === v) continue;
+        const dx = other.vehicle.pos.x - v.pos.x;
+        const dz = other.vehicle.pos.z - v.pos.z;
+        const along = dx * fwdX + dz * fwdZ;
+        const side = Math.abs(dx * fwdZ - dz * fwdX);
+        if (along > 0 && side < 4 && along < best) { best = along; any = true; }
+      }
+      return any ? best : Infinity;
+    };
+    const behindDist = () => {
+      let best = Infinity, any = false;
+      for (const other of karts) {
+        if (other.vehicle === v) continue;
+        const dx = other.vehicle.pos.x - v.pos.x;
+        const dz = other.vehicle.pos.z - v.pos.z;
+        const along = dx * fwdX + dz * fwdZ;
+        if (along < 0 && -along < best) { best = -along; any = true; }
+      }
+      return any ? best : Infinity;
+    };
+    const curvHere = Math.abs(track.lineAt(s + 6).curv);
+    const straight = curvHere < 0.015;
+
+    switch (def.category) {
+      case 'projectile': {
+        const d = aheadDist();
+        if (d < 42 && straight && Math.random() < 0.5 + eag * 0.4) return true;
+        return d < 20 && Math.random() < 0.3;
+      }
+      case 'hazard': {
+        // drop traps when someone is close behind or on a straight before a corner
+        const bd = behindDist();
+        if (bd < 22 && Math.random() < 0.4 + eag * 0.3) return true;
+        return straight && Math.random() < 0.12;
+      }
+      case 'buff':
+        // use boosts/attack buffs on straights
+        return straight && Math.random() < 0.35 + eag * 0.45;
+      case 'debuff':
+      case 'zone': {
+        const d = aheadDist();
+        return (d < 48 || behindDist() < 30) && Math.random() < 0.3 + eag * 0.4;
+      }
+      case 'utility':
+        return Math.random() < 0.25 + eag * 0.3;
+      default:
+        return Math.random() < 0.2;
+    }
   }
 }

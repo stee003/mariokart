@@ -4,7 +4,9 @@
 // Supports {placeholder} interpolation.
 // ============================================================================
 
-export const STRINGS = {
+import { CONTENT_STRINGS } from './content/strings.js';
+
+const BASE_STRINGS = {
   'game.title':        { en: 'Sunforge Racers',                     it: 'Sunforge Racers' },
   'game.subtitle':     { en: 'Desert Canyon Grand Prix',            it: 'Gran Premio del Canyon del Deserto' },
   'game.pilot':        { en: 'Pilot: Ember the Dustfox',            it: 'Pilota: Ember la Volpe delle Sabbie' },
@@ -67,6 +69,10 @@ export const STRINGS = {
   'error.webgl':       { en: 'WebGL is not available in this browser.',
                          it: 'WebGL non è disponibile in questo browser.' },
 };
+
+// Content-owned strings (characters, parts, items...) merged on top so
+// content files keep their own EN/IT next to their data.
+export const STRINGS = { ...BASE_STRINGS, ...CONTENT_STRINGS };
 
 export class LocalizationManager {
   constructor(saveManager) {

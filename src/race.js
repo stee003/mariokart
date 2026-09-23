@@ -11,12 +11,14 @@ import { normalizeAngle } from './vehicle.js';
 const R = CONFIG.race;
 
 export class RaceManager {
-  constructor({ track, hud, audio, i18n, onEvent }) {
+  constructor({ track, hud, audio, i18n, onEvent, items = null }) {
     this.track = track;
     this.hud = hud;
     this.audio = audio;
     this.i18n = i18n;
     this.onEvent = onEvent;               // fx hook: (type, payload)
+    this.items = items;                   // optional ItemSystem (power-ups)
+    this.itemsEnabled = !!items;
 
     this.karts = [];                      // {vehicle, ai, nameKey, isPlayer, color}
     this.kartState = new Map();           // per-kart race data
@@ -59,6 +61,7 @@ export class RaceManager {
       kart.vehicle.place(grid[i]);
       this.kartState.set(kart.vehicle, this._freshKartState());
     });
+    if (this.itemsEnabled) this.items.reset();
     this.hud.onRaceStart();
   }
 
@@ -78,20 +81,33 @@ export class RaceManager {
     this.raceTime += dt;
 
     // inputs + physics -------------------------------------------------------
+    const racing2 = this.state === 'racing' || this.state === 'finished';
+    const order = this.itemsEnabled ? this.positions() : null;
     for (const kart of this.karts) {
+      if (order) {
+        kart._racePos = order.indexOf(kart) + 1;
+        kart._raceTotal = this.karts.length;
+        kart._raceLap = this.kartState.get(kart.vehicle).lap;
+      }
       let input;
       if (kart.isPlayer) {
         input = { ...this.playerInput };
       } else {
         // AI keeps driving during the slow-mo finish sequence
-        input = kart.ai.update(dt, this.karts, this.state === 'racing' || this.state === 'finished');
+        input = kart.ai.update(dt, this.karts, racing2, this.items);
       }
       kart.vehicle.step(dt, input, false);
       this._fxForKart(kart);
+
+      // item activation (player key or AI decision)
+      if (this.itemsEnabled && racing2 && input.item) {
+        this.items.useItem(kart, this.karts);
+      }
     }
 
     this._collideKarts();
     this._collideObstacles();
+    if (this.itemsEnabled && racing2) this.items.update(dt, this.karts, this.raceTime);
 
     if (this.state === 'racing') {
       for (const kart of this.karts) this._checkpoints(kart);
@@ -202,6 +218,8 @@ export class RaceManager {
     for (let i = 0; i < this.karts.length; i++) {
       for (let j = i + 1; j < this.karts.length; j++) {
         const a = this.karts[i].vehicle, b = this.karts[j].vehicle;
+        // phased (intangible) karts pass through everything
+        if (this.itemsEnabled && (this.items.isIntangible(a) || this.items.isIntangible(b))) continue;
         const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
         const distSq = dx * dx + dz * dz;
         const minDist = CONFIG.vehicle.collisionRadius * 2;

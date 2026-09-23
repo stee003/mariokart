@@ -429,6 +429,14 @@ export function updateKartVisual(kartVis, vehicle, dt, time) {
   body.rotation.x += (targetPitch - body.rotation.x) * Math.min(1, 12 * dt);
   body.position.y = 0;
 
+  // item-hit spinout visual
+  if (vehicle._spinT > 0) {
+    vehicle._spinT = Math.max(0, vehicle._spinT - dt);
+    body.rotation.y = (1 - vehicle._spinT / 0.85) * Math.PI * 2;
+  } else if (body.rotation.y !== 0) {
+    body.rotation.y = 0;
+  }
+
   // boost flames
   const boosting = vehicle.boost.boosting;
   kartVis.flame.visible = boosting;

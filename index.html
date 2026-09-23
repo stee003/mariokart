@@ -26,12 +26,21 @@
       </div>
 
       <div class="hud-bottom">
-        <div id="boost-box">
-          <div id="boost-label">DRIFT CHARGE</div>
-          <div id="boost-meter">
-            <div class="seg seg1"><div class="fill"></div></div>
-            <div class="seg seg2"><div class="fill"></div></div>
-            <div class="seg seg3"><div class="fill"></div></div>
+        <div class="hud-left">
+          <div id="item-box" class="hidden">
+            <canvas id="item-icon" width="56" height="56"></canvas>
+            <div class="item-text">
+              <div id="item-label" data-i18n="hud.item">ITEM</div>
+              <div id="item-name"></div>
+            </div>
+          </div>
+          <div id="boost-box">
+            <div id="boost-label">DRIFT CHARGE</div>
+            <div id="boost-meter">
+              <div class="seg seg1"><div class="fill"></div></div>
+              <div class="seg seg2"><div class="fill"></div></div>
+              <div class="seg seg3"><div class="fill"></div></div>
+            </div>
           </div>
         </div>
         <div id="speed-box">
@@ -83,6 +92,13 @@
         <div class="setting-row">
           <label data-i18n="settings.volume">Volume</label>
           <input type="range" id="volume" min="0" max="1" step="0.05" />
+        </div>
+        <div class="setting-row">
+          <label data-i18n="settings.items">Power-ups</label>
+          <div class="lang-toggle">
+            <button class="btn btn-small" id="items-on" data-i18n="settings.on">On</button>
+            <button class="btn btn-small" id="items-off" data-i18n="settings.off">Off</button>
+          </div>
         </div>
         <button class="btn" id="btn-settings-back" data-i18n="settings.back">Back</button>
       </div>

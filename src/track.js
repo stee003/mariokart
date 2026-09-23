@@ -142,6 +142,15 @@ export class TrackManager {
         return { s: f * L, halfW, idx };
       });
 
+    // Item box rows (used by ItemSystem when power-ups are enabled).
+    // Three-lane rows at rhythm points around the lap.
+    this.itemBoxes = [];
+    for (const f of [0.085, 0.26, 0.44, 0.62, 0.805, 0.94]) {
+      for (const lat of [-4, 0, 4]) {
+        this.itemBoxes.push({ s: f * L, lat });
+      }
+    }
+
     // Decorative / collision ranges (used by environment + camera)
     this.tunnelRange = [0.657 * L, 0.705 * L];
     this.bridgeRange = [0.48 * L, 0.585 * L];
