@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
-    "test": "node test/logic.test.mjs && node test/server.test.mjs && node test/content.test.mjs && node test/items.test.mjs && node test/modes.test.mjs && node test/systems.test.mjs && node test/battle.test.mjs",
-    "test:all": "node test/logic.test.mjs && node test/server.test.mjs && node test/content.test.mjs && node test/items.test.mjs && node test/modes.test.mjs && node test/systems.test.mjs && node test/battle.test.mjs && node test/arenas.test.mjs && node test/tracks.test.mjs && node test/env.test.mjs && node test/race_sim.test.mjs && node test/boot_smoke.mjs"
+    "test": "node test/logic.test.mjs && node test/syntax.test.mjs && node test/server.test.mjs && node test/content.test.mjs && node test/items.test.mjs && node test/modes.test.mjs && node test/systems.test.mjs && node test/battle.test.mjs && node test/battleai.test.mjs && node test/garage.test.mjs && node test/online.test.mjs && node test/ui.test.mjs",
+    "test:all": "node test/logic.test.mjs && node test/syntax.test.mjs && node test/server.test.mjs && node test/content.test.mjs && node test/items.test.mjs && node test/modes.test.mjs && node test/systems.test.mjs && node test/battle.test.mjs && node test/battleai.test.mjs && node test/garage.test.mjs && node test/online.test.mjs && node test/ui.test.mjs && node test/entry.test.mjs && node test/arenas.test.mjs && node test/tracks.test.mjs && node test/env.test.mjs && node test/race_sim.test.mjs && node test/boot_smoke.test.mjs"
   }
 }

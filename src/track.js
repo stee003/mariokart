@@ -27,6 +27,11 @@ function catmull1(p0, p1, p2, p3, t) {
 
 const UP = new THREE.Vector3(0, 1, 0);
 
+// Straight-line ceiling on the racing line, as a multiple of the stock top
+// speed. Every kart caps this with its own maxSpeed, so the value only has to
+// be high enough to never bind for the fastest legal build.
+const LINE_SPEED_CEILING = 1.5;
+
 export class TrackManager {
   constructor(def = SUNFORGE_DEF) {
     this.def = def;
@@ -406,7 +411,12 @@ export class TrackManager {
   // ------------------------------------------------------------------ racing line
   _buildRacingLine() {
     const n = this.n, step = this.step;
-    const vmax = CONFIG.vehicle.maxSpeed;
+    // The line stores the *corner-limited* speed (physics limit from the
+    // lateral-acceleration budget). Straights are left at a generous ceiling
+    // instead of being clamped to the stock top speed, and each kart applies
+    // its own cap through lineAt(s, cap) - that is what makes the topSpeed
+    // stat matter for AI drivers exactly as much as it does for the player.
+    const vmax = CONFIG.vehicle.maxSpeed * LINE_SPEED_CEILING;
     const latA = CONFIG.ai.cornerLatAccel;
     const curv = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -441,16 +451,19 @@ export class TrackManager {
   }
 
   // Interpolated racing-line info at progress s (progress may exceed L).
-  lineAt(s) {
+  // `cap` is the caller's own top speed: corner limits apply to every kart
+  // identically, straight-line speed is capped per kart.
+  lineAt(s, cap = Infinity) {
     s = ((s % this.L) + this.L) % this.L;
     const f = (s / this.L) * this.n;
     const i = Math.floor(f) % this.n;
     const j = (i + 1) % this.n;
     const t = f - Math.floor(f);
     const line = this.line;
+    const raw = line.target[i] + (line.target[j] - line.target[i]) * t;
     return {
       idx: i,
-      targetSpeed: line.target[i] + (line.target[j] - line.target[i]) * t,
+      targetSpeed: raw < cap ? raw : cap,
       prefLat: line.prefLat[i] + (line.prefLat[j] - line.prefLat[i]) * t,
       curv: line.curv[i] + (line.curv[j] - line.curv[i]) * t,
     };

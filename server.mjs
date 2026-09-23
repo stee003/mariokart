@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Zero-dependency static file server for Sunforge Racers.
+// Zero-dependency game server for Sunforge Racers: static files + the online
+// API + the netplay relay (all in-process, no npm packages).
 //
 // Replaces `python3 -m http.server 8000`, which fails on Windows machines
 // without Python installed (the `python3` name hits the Microsoft Store
@@ -17,11 +18,45 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OnlineStore } from './src/net/store.js';
+import { createApi } from './src/net/api.js';
+import { WsServer } from './src/net/ws.js';
+import { RoomManager } from './src/net/rooms.js';
+import { createRelay } from './src/net/relay.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || process.argv[2] || 8000);
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Online state lives in data/online.json (git-ignored, atomic writes). Set
+// DATA_DIR to a temp directory for throw-away servers (tests do this).
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'online.json');
+
+function loadStore() {
+  if (process.env.ONLINE_OFF === '1') return new OnlineStore();
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    return OnlineStore.fromJSON(JSON.parse(raw), { dataFile: DATA_FILE });
+  } catch {
+    return new OnlineStore({ dataFile: DATA_FILE });
+  }
+}
+
+const store = loadStore();
+store.setPersister((data) => {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = `${DATA_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, DATA_FILE);       // atomic swap: never a half-written file
+  } catch (err) {
+    console.warn('  [online] could not persist state:', err.message);
+  }
+});
+
+const rooms = new RoomManager();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -95,7 +130,19 @@ function statOrNull(p) {
   }
 }
 
+const api = createApi({ store, rooms });
+
 const server = http.createServer((req, res) => {
+  // Online API first: it owns /api/* and is method-aware (GET + POST).
+  const url = req.url || '/';
+  if (url === '/api' || url.startsWith('/api/')) {
+    api.handle(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'server-error' }));
+    });
+    return;
+  }
+
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Method Not Allowed\n');
@@ -134,6 +181,10 @@ const server = http.createServer((req, res) => {
   stream.pipe(res);
 });
 
+// Netplay relay: lobby join/leave, kart state broadcast, race start/finish.
+const ws = new WsServer(server, { path: '/ws' });
+const relay = createRelay({ ws, rooms });
+
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${PORT} is already in use.`);
@@ -144,8 +195,14 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-process.on('SIGINT', () => server.close(() => process.exit(0)));
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+function shutdown() {
+  relay.stop();
+  ws.close();
+  store.flush();
+  server.close(() => process.exit(0));
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 server.listen(PORT, HOST, () => {
   const { port } = server.address();
@@ -153,5 +210,6 @@ server.listen(PORT, HOST, () => {
   console.log(`  Local:   http://localhost:${port}`);
   console.log(`  Network: http://${HOST}:${port}   (bound to ${HOST})`);
   console.log(`\n  Serving ${ROOT}`);
+  console.log(`  Online API: /api/*   Netplay relay: /ws   State: ${DATA_FILE}`);
   console.log(`  Press Ctrl+C to stop.\n`);
 });

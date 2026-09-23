@@ -7,7 +7,7 @@ import { levelFromXp } from './progression.js';
 
 // Counters live in save key 'stats'. Use recordStats() to increment.
 const STAT_DEFAULTS = {
-  races: 0, wins: 0, podiums: 0, laps: 0,
+  races: 0, wins: 0, podiums: 0, laps: 0, nightWins: 0,
   fastestLaps: 0, records: 0,
   cups: 0, cupsGold: 0, cupsPlatinum: 0,
   itemsTaken: 0, itemsUsed: 0,
@@ -57,6 +57,8 @@ export const ACHIEVEMENTS = [
   { id: 'items_30',     nameKey: 'ach.items30',     descKey: 'ach.items30.d',     cond: (s) => s.itemsTaken >= 30 },
   { id: 'ghost_1',      nameKey: 'ach.ghost1',      descKey: 'ach.ghost1.d',      cond: (s) => s.ghostsRaced >= 1 },
   { id: 'explorer',     nameKey: 'ach.explorer',    descKey: 'ach.explorer.d',    cond: (s) => s.tracksPlayed >= 16 },
+  { id: 'night_shift',  nameKey: 'ach.nightShift',  descKey: 'ach.nightShift.d',  cond: (s) => s.nightWins >= 1 },
+  { id: 'collector',    nameKey: 'ach.collector',   descKey: 'ach.collector.d',   cond: (s) => s.itemsTaken >= 60 },
   { id: 'level_5',      nameKey: 'ach.level5',      descKey: 'ach.level5.d',      cond: (s, p) => p.level >= 5 },
   { id: 'level_10',     nameKey: 'ach.level10',     descKey: 'ach.level10.d',     cond: (s, p) => p.level >= 10 },
 ];

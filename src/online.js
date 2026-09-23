@@ -15,6 +15,11 @@
 //                    Every call is idempotent-safe and fails soft (throws
 //                    OnlineUnavailable; the UI falls back to local).
 //
+//   OnlineService  - picks the provider at runtime: it pings the game server
+//                    and uses HttpProvider when the server answers, otherwise
+//                    it stays on LocalProvider. The UI only ever talks to the
+//                    service, so a dropped backend degrades gracefully.
+//
 // Ranked mode: monthly seasons (season id = YYYY-MM). Match results feed a
 // points ladder; deltas are computed by the provider, never by clients.
 // ============================================================================
@@ -119,5 +124,104 @@ export class HttpProvider {
       method: 'POST',
       body: JSON.stringify({ player: playerName, ...result }),
     });
+  }
+}
+
+// ------------------------------------------------------------------ service
+// The URL the browser should talk to when the game is served over http(s).
+export function defaultBaseUrl(location = globalThis.location) {
+  if (!location || !location.origin || location.origin === 'null') return null;
+  if (!/^https?:$/.test(location.protocol || '')) return null;
+  return `${location.origin}/api`;
+}
+
+// Runtime provider switch. Implements the same provider contract it wraps, so
+// every existing consumer (records screen, leaderboard submit) keeps working
+// without knowing whether a backend exists.
+export class OnlineService {
+  constructor({ leaderboard, fetchImpl = globalThis.fetch, baseUrl = defaultBaseUrl(), timeoutMs = 2500 } = {}) {
+    this.local = new LocalProvider(leaderboard);
+    this.http = baseUrl && fetchImpl ? new HttpProvider(baseUrl, fetchImpl) : null;
+    this.baseUrl = baseUrl;
+    this.timeoutMs = timeoutMs;
+    this._online = false;
+    this.latency = null;
+    this.status = this.http ? 'unknown' : 'offline';
+    this.info = null;
+  }
+
+  get provider() { return this._online && this.http ? this.http : this.local; }
+  get online() { return this._online; }
+  get name() { return this.provider.name; }
+
+  async probe() {
+    if (!this.http) { this.status = 'offline'; return false; }
+    this.status = 'checking';
+    try {
+      const res = await this.http._fetch(`${this.baseUrl}/ping`, { signal: AbortSignal.timeout(this.timeoutMs) });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const t0 = Date.now();
+      const info = await res.json();
+      this.latency = Date.now() - t0;
+      this.info = info;
+      this._online = true;
+      this.status = 'online';
+      return true;
+    } catch {
+      this._online = false;
+      this.status = 'offline';
+      return false;
+    }
+  }
+
+  // ---- provider contract (delegates to whichever provider is active) -------
+  async ping() {
+    if (this._online && this.http) {
+      const t0 = Date.now();
+      await this.http.ping();
+      return { ok: true, latencyMs: Date.now() - t0 };
+    }
+    return { ok: false, latencyMs: null };
+  }
+
+  fetchLeaderboard(trackId, limit = 10) { return this.provider.fetchLeaderboard(trackId, limit); }
+  submitScore(trackId, entry) { return this.provider.submitScore(trackId, entry); }
+  getRanked(player) { return this.provider.getRanked(player); }
+  submitMatch(player, result) { return this.provider.submitMatch(player, result); }
+
+  // ---- online-only helpers (records browser / online screen) --------------
+  async fetchWorldGhost(trackId, rank = 1) {
+    if (!this._online || !this.http) return null;
+    try {
+      const data = await this.http._req(`/leaderboard/${encodeURIComponent(trackId)}/ghost?rank=${rank}`);
+      if (!data || !Array.isArray(data.frames)) return null;
+      // server frame format: [x, y, z, yaw] -> GhostPlayer's {x,y,z,yaw}
+      return {
+        name: data.name, time: data.time,
+        frames: data.frames.map(([x, y, z, yaw]) => ({ x, y, z, yaw })),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async fetchLadder(limit = 10) {
+    if (!this._online || !this.http) return [];
+    try {
+      const data = await this.http._req(`/ranked/ladder?limit=${limit}`);
+      return data.rows || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchRooms() {
+    if (!this._online || !this.http) return [];
+    try {
+      const data = await this.http._req('/rooms');
+      return data.open || [];
+    } catch {
+      return [];
+    }
   }
 }

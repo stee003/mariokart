@@ -22,10 +22,19 @@ import { buildThemedEnvironment } from './environment2.js';
 import { TRACK_DEFS } from './content/trackDefs.js';
 import { ARENAS, getArena, enforceArenaWalls } from './content/arenas.js';
 import { BATTLE_MODES, BattleManager } from './battle.js';
-import { buildKart, updateKartVisual } from './kartMesh.js';
+import { BattleAI } from './battleAI.js';
+import { BattleZoneFX } from './battleFX.js';
+import { buildKart, buildKartFromLoadout, updateKartVisual } from './kartMesh.js';
+import { KartPreview } from './kartPreview.js';
 import { animateCharacter } from './characterMesh.js';
 import { VehicleController } from './vehicle.js';
 import { AIController } from './ai.js';
+import { buildRaceRoster } from './roster.js';
+import { buildLoadout } from './content/loadout.js';
+import { Garage } from './garage.js';
+import { GarageUI } from './ui/garageUI.js';
+import { RecordsUI } from './ui/recordsUI.js';
+import { getCharacter } from './content/characters.js';
 import { CameraController } from './camera.js';
 import { RaceManager, formatTime } from './race.js';
 import { HUDManager } from './hud.js';
@@ -42,9 +51,14 @@ import { DIFFICULTY_TIERS, getDifficulty } from './aiDifficulty.js';
 import { applyEvent, getProgress } from './progression.js';
 import { recordStats, checkAchievements, trackPlayed } from './achievements.js';
 import { LocalLeaderboard } from './leaderboard.js';
-import { LocalProvider } from './online.js';
+import { OnlineService } from './online.js';
+import { NetSession } from './netplay.js';
+import { OnlineUI } from './ui/onlineUI.js';
 
 const FIXED_DT = 1 / 60;
+
+// Themes that count as "after dark" for the Night Shift achievement.
+const NIGHT_THEMES = new Set(['space', 'crystal', 'storm']);
 
 class Game {
   constructor() {
@@ -55,8 +69,11 @@ class Game {
     this.music = new MusicManager(this.save);
     this.records = new RecordsStore(this.save);
     this.leaderboard = new LocalLeaderboard(this.save);
-    this.provider = new LocalProvider(this.leaderboard);
-    this.appState = 'menu';          // menu | race
+    // OnlineService is itself a provider: it stays on the local leaderboard
+    // until the game server answers /api/ping, then switches to HTTP.
+    this.online = new OnlineService({ leaderboard: this.leaderboard, save: this.save });
+    this.provider = this.online;
+    this.appState = 'menu';          // menu | garage | race
     this.settingsReturn = 'screen-main';
 
     // mode state -------------------------------------------------------------
@@ -85,10 +102,27 @@ class Game {
     this.sparks = new ParticlePool(this.scene, CONFIG.particles.sparkCount, true);
     this.hud = new HUDManager(this.i18n);
 
+    // customization (Increment 6): the garage owns the equipped loadout, the
+    // preview canvas is created lazily the first time the garage opens.
+    this.garage = new Garage(this.save);
+    this.garageUI = null;
+    this.recordsUI = null;
+    this.onlineUI = null;
+    this.preview = null;
+
+    // netplay state (live races). Remote karts are visual-only: they are
+    // driven by interpolated relay snapshots and never collide with us.
+    this.net = null;
+    this.netRace = false;
+    this.netKarts = new Map();      // net player id -> { kart, vis, id }
+    this.rankedMatch = false;
+    this._netSendAcc = 0;
+
     this.trackId = this.save.get('lastTrack', 'sunforge_circuit');
     this._loadTrack(this.trackId, true);
 
     this.bindUI();
+    this.refreshMenuSummary();
     window.addEventListener('resize', () => this.onResize());
 
     this.clock = new THREE.Clock();
@@ -151,30 +185,33 @@ class Game {
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;   // shown on race start
 
     // karts ---------------------------------------------------------------------
+    // Roster: the player drives their garage build; every rival drives their own
+    // character's signature loadout (src/roster.js), so stats, silhouettes and
+    // physics all differ across the grid. The player entry keeps the 'ai.you'
+    // name key so Grand Prix scoring and records are unchanged.
     this.kartVisuals = new Map();
-    const roster = [
-      { nameKey: 'ai.cinder',  color: 0xd9452f, accent: 0xffd23f, pilot: 0x53302a, ai: 'aggressive' },
-      { nameKey: 'ai.zephyr',  color: 0x2fa877, accent: 0xd8f4e6, pilot: 0x3c5c4e, ai: 'balanced' },
-      { nameKey: 'ai.bastion', color: 0x4159c9, accent: 0x9fb4ff, pilot: 0x37406e, ai: 'defensive' },
-    ].slice(0, solo ? 0 : Math.max(0, Math.min(3, rivals)));
-    roster.push({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
+    this.roster = buildRaceRoster({
+      playerSpec: this.garage.spec,
+      rivals: solo ? 0 : Math.max(0, Math.min(3, rivals)),
+    });
 
     this.race = new RaceManager({
       track: this.track, hud: this.hud, audio: this.audio, i18n: this.i18n,
       items: this.items,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
-    for (const d of roster) {
-      const vehicle = new VehicleController(this.track, d.ai === null);
-      const vis = buildKart(d.color, d.accent, d.pilot);
+    for (const d of this.roster) {
+      const vehicle = new VehicleController(this.track, d.isPlayer, d.loadout.params, d.loadout.driftMods);
+      const vis = buildKartFromLoadout(d.loadout);
       this.scene.add(vis.group);
       this.scene.add(vis.shadow);
       this.kartVisuals.set(vehicle, vis);
       const kart = {
         vehicle,
-        ai: d.ai ? new AIController(vehicle, this.track, d.ai) : null,
+        ai: d.isPlayer ? null : new AIController(vehicle, this.track, d.personality),
         nameKey: d.nameKey,
-        isPlayer: d.ai === null,
+        characterId: d.characterId,
+        isPlayer: d.isPlayer,
         charVis: vis.charVis || null,
       };
       if (kart.ai) kart.ai.setDifficulty(this.save.get('difficulty', 'normal'));
@@ -234,6 +271,9 @@ class Game {
     };
 
     click('btn-start', () => this.openModeSelect());
+    click('btn-garage', () => this.openGarage());
+    click('btn-records', () => this.openRecords());
+    click('btn-online', () => this.openOnline());
     click('btn-settings', () => { this.settingsReturn = 'screen-main'; this.openSettings(); });
     click('btn-settings-back', () => this.hud.showScreen(this.settingsReturn));
     click('btn-resume', () => this.setPaused(false));
@@ -261,6 +301,7 @@ class Game {
     $('lang-en').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('en'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     $('lang-it').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('it'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     syncLang();
+    this.i18n.onChange(() => this.refreshMenuSummary());
 
     // sliders
     $('cam-dist').value = this.camCtl.distance;
@@ -353,6 +394,303 @@ class Game {
 
   openSettings() { this.hud.showScreen('screen-settings'); }
 
+  // -------------------------------------------------------------- garage / UI
+  // The garage is a menu-level state: the race renderer keeps its world (so
+  // returning to the grid is instant) but stops drawing while the preview's
+  // own canvas is on screen.
+  openGarage() {
+    this.appState = 'garage';
+    this.hud.showHUD(false);
+    if (!this.preview) this.preview = new KartPreview(document.getElementById('garage-canvas'));
+    if (!this.garageUI) {
+      this.garageUI = new GarageUI({
+        i18n: this.i18n,
+        garage: this.garage,
+        preview: this.preview,
+        onBack: () => this.closeGarage(),
+        onRace: () => { this.closeGarage(); this.openModeSelect(); },
+      });
+    }
+    this.hud.showScreen('screen-garage');
+    this.garageUI.show();
+    this.music.setState('menu');
+  }
+
+  closeGarage() {
+    if (this.garageUI) this.garageUI.hide();
+    this._vocalize(this.playerKart, 'greet');
+    this.appState = 'menu';
+    this.hud.showScreen('screen-main');
+    this.refreshMenuSummary();
+    this._rebuildPlayerVisual();
+  }
+
+  // Menu-level records/leaderboard/achievement browser.
+  // Online screen: server status, ranked standing, world ghosts, live lobbies.
+  openOnline() {
+    if (!this.onlineUI) {
+      this.onlineUI = new OnlineUI({
+        i18n: this.i18n,
+        service: this.online,
+        save: this.save,
+        tracks: TRACK_DEFS,
+        session: this._netSession(),
+        onBack: () => this.hud.showScreen('screen-main'),
+        onRankedRace: (trackId) => this.startRankedRace(trackId),
+        onGhostRace: (trackId, rank) => this.startGhostDuel(trackId, rank),
+        onLobbyStart: () => {},
+      });
+    } else {
+      this.onlineUI.session = this._netSession();
+    }
+    this.appState = 'menu';
+    this.hud.showScreen('screen-online');
+    this.onlineUI.show();
+  }
+
+  // One NetSession for the whole app; created lazily so a player who never
+  // opens the online screen never opens a socket.
+  _netSession() {
+    if (!this.net) {
+      this.net = new NetSession();
+      this.net.on('started', (msg) => this._onNetRaceStarted(msg));
+      this.net.on('finished', (msg) => {
+        this.hud.notify(this.i18n.t('online.netFinished', {
+          name: msg.name, time: formatTime(msg.time ?? 0),
+        }));
+      });
+      this.net.on('over', (msg) => this._onNetRaceOver(msg));
+      this.net.on('serverError', (msg) => {
+        this.hud.notify(this.i18n.t(`online.error.${msg.code}`) || this.i18n.t('online.error.generic'));
+      });
+    }
+    return this.net;
+  }
+
+  playerName() { return this.save.get('playerName', 'Racer'); }
+
+  // ------------------------------------------------------------ ranked race
+  startRankedRace(trackId) {
+    this.rankedMatch = true;
+    this.netRace = false;
+    this._startModeOnTrack('quick', trackId || this.trackId);
+  }
+
+  async _submitRankedResult(position) {
+    const won = position === 1;
+    const player = this.playerName();
+    try {
+      if (!this.online.online) await this.online.probe();
+      const res = await this.online.submitMatch(player, { trackId: this.trackId, won });
+      if (res && Number.isFinite(res.delta)) {
+        const delta = `${res.delta > 0 ? '+' : ''}${res.delta}`;
+        this.hud.notify(this.i18n.t('online.rankedResult', { delta, points: Math.round(res.points) }));
+      }
+      this.online.ranked = res;
+    } catch {
+      this.hud.notify(this.i18n.t('online.error.generic'));
+    } finally {
+      this.rankedMatch = false;
+    }
+  }
+
+  // --------------------------------------------------------- world ghost duel
+  async startGhostDuel(trackId, rank = 1) {
+    const ghost = await this.online.fetchWorldGhost(trackId, rank);
+    if (!ghost || !ghost.frames.length) {
+      this.hud.notify(this.i18n.t('online.noGhost'));
+      return;
+    }
+    this.downloadedGhost = ghost;
+    this._startModeOnTrack('timetrial', trackId);
+  }
+
+  // ------------------------------------------------------------- live netplay
+  async _onNetRaceStarted(msg) {
+    const trackId = msg.trackId || this.trackId;
+    this.mode = 'quick';
+    this.rankedMatch = false;
+    this.netRace = true;
+    this._loadTrack(trackId, false, { solo: true, rivals: 0 });
+    this._buildNetKarts();
+    this.hud.showScreen('');
+    this.startRace();
+    this.hud.notify(this.i18n.t('online.netRace'));
+  }
+
+  // Remote racers get their own kart mesh (their own garage build) and are
+  // added to the scene only - no physics, no collisions, no race logic.
+  _buildNetKarts() {
+    for (const [, entry] of this.netKarts) {
+      this.scene.remove(entry.vis.group);
+      this.scene.remove(entry.vis.shadow);
+    }
+    this.netKarts.clear();
+    if (!this.net) return;
+    const grid = this.track.startGrid();
+    let slot = 1;
+    for (const p of this.net.remotes()) {
+      const spec = {
+        characterId: p.characterId || this.garage.spec.characterId,
+        chassisId: p.chassisId || this.garage.spec.chassisId,
+        wheelId: p.wheelId || this.garage.spec.wheelId,
+        paintId: p.paintId || this.garage.spec.paintId,
+        decalId: 'none',
+        exhaustId: this.garage.spec.exhaustId,
+        effectId: this.garage.spec.effectId,
+      };
+      let loadout = null;
+      try { loadout = buildLoadout(spec); } catch { loadout = this.garage.loadout; }
+      const vis = buildKartFromLoadout(loadout);
+      const slotPos = grid[(slot + 1) % grid.length];
+      if (slotPos) vis.group.position.set(slotPos.pos.x, slotPos.pos.y ?? 0, slotPos.pos.z);
+      this.scene.add(vis.group);
+      this.scene.add(vis.shadow);
+      this.netKarts.set(p.id, { id: p.id, name: p.name, vis, loadout });
+      slot++;
+    }
+  }
+
+  _updateNetKarts(dt) {
+    if (!this.net || !this.netRace) return;
+    for (const [, entry] of this.netKarts) {
+      const sample = this.net.sampleRemote(entry.id);
+      if (!sample) continue;
+      const g = entry.vis.group;
+      g.position.set(sample.pos[0], sample.pos[1], sample.pos[2]);
+      g.rotation.y = sample.yaw;
+      // keep the wheels and pilot alive without a vehicle of their own
+      entry.vis.wheels?.forEach((w, i) => { w.rotation.x += dt * 6 * (i % 2 ? 1 : -1) * 0.5; });
+      if (entry.vis.charVis) {
+        entry.vis.charVis.group.position.y = 0.6 + Math.sin(this.time * 6 + entry.id.length) * 0.03;
+      }
+      entry.vis.shadow.position.set(sample.pos[0], (sample.pos[1] ?? 0) + 0.02, sample.pos[2]);
+    }
+  }
+
+  // Sends our own kart to the relay at a fixed rate (the session throttles).
+  _sendNetState() {
+    if (!this.net || !this.netRace) return;
+    const v = this.playerKart.vehicle;
+    const st = this.race.kartState.get(v);
+    this.net.sendState({
+      pos: [v.pos.x, v.pos.y, v.pos.z],
+      yaw: v.yaw,
+      speed: v.speedAbs,
+      lap: this.race.lap ?? 0,
+      progress: this.race.progressOf ? this.race.progressOf(this.playerKart) : (v.surf?.progress ?? 0),
+      drifting: !!(v.drift && v.drift.drifting),
+      boosting: !!v.boost.boosting,
+      item: this.items.heldItem(this.playerKart),
+      finished: st ? !!st.finished : false,
+    });
+  }
+
+  _onNetRaceOver(msg) {
+    const rows = (msg.standings || []).slice(0, 8);
+    this.netStandings = rows;
+    if (this.netRace) this.hud.notify(this.i18n.t('online.netRace'));
+    this._renderNetStandings();
+  }
+
+  _renderNetStandings() {
+    const box = document.getElementById('results-net');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!this.netStandings || !this.netStandings.length) {
+      box.classList.add('hidden');
+      return;
+    }
+    box.classList.remove('hidden');
+    const head = document.createElement('div');
+    head.className = 'panel-head';
+    head.textContent = this.i18n.t('online.ladder');
+    box.appendChild(head);
+    for (const row of this.netStandings) {
+      const line = document.createElement('div');
+      line.className = 'gp-row' + (row.name === this.playerName() ? ' you' : '');
+      const nm = document.createElement('span');
+      nm.textContent = `#${row.rank} ${row.name}`;
+      const val = document.createElement('span');
+      val.className = 'gp-pts';
+      val.textContent = row.finished && row.time != null ? formatTime(row.time) : `${row.lap}`;
+      line.append(nm, val);
+      box.appendChild(line);
+    }
+  }
+
+  // Leaving a live race (results screen, menu, track switch) closes the room.
+  _leaveNetRace() {
+    if (!this.netRace) return;
+    this.netRace = false;
+    if (this.net) this.net.leave();
+    for (const [, entry] of this.netKarts) {
+      this.scene.remove(entry.vis.group);
+      this.scene.remove(entry.vis.shadow);
+    }
+    this.netKarts.clear();
+    this.netStandings = null;
+  }
+
+  openRecords() {
+    if (!document.getElementById('screen-records')) return;
+    this.appState = 'menu';
+    if (!this.recordsUI) {
+      this.recordsUI = new RecordsUI({
+        i18n: this.i18n,
+        save: this.save,
+        provider: this.provider,
+        records: this.records,
+        onBack: () => this.hud.showScreen('screen-main'),
+        onPractice: (trackId) => this._startModeOnTrack('timetrial', trackId),
+      });
+    }
+    this.hud.showScreen('screen-records');
+    this.recordsUI.show();
+  }
+
+  // Player headline lines on the main menu (pilot + current build).
+  refreshMenuSummary() {
+    const loadout = this.garage.loadout;
+    const i18n = this.i18n;
+    const pilot = document.getElementById('menu-pilot');
+    const kart = document.getElementById('menu-kart');
+    if (pilot) {
+      pilot.textContent = i18n.t('menu.pilotLine', {
+        name: i18n.t(loadout.character.nameKey),
+        species: i18n.t(loadout.character.speciesKey),
+      });
+    }
+    if (kart) {
+      kart.textContent = i18n.t('menu.kartLine', {
+        chassis: i18n.t(loadout.chassis.nameKey),
+        wheels: i18n.t(loadout.wheels.nameKey),
+      });
+    }
+  }
+
+  // Swaps the player's kart mesh + physics to the freshly equipped build
+  // without rebuilding the world (used after the garage closes).
+  _rebuildPlayerVisual() {
+    const kart = this.playerKart;
+    if (!kart || !this.kartVisuals) return;
+    const old = this.kartVisuals.get(kart.vehicle);
+    if (old) {
+      this.scene.remove(old.group);
+      this.scene.remove(old.shadow);
+    }
+    const loadout = this.garage.loadout;
+    const vis = buildKartFromLoadout(loadout);
+    this.scene.add(vis.group);
+    this.scene.add(vis.shadow);
+    this.kartVisuals.set(kart.vehicle, vis);
+    kart.charVis = vis.charVis || null;
+    kart.characterId = loadout.character.id;
+    kart.vehicle.params = loadout.params;
+    kart.vehicle.driftMods = loadout.driftMods;
+    kart.vehicle.drift.mods = loadout.driftMods;
+  }
+
   // ------------------------------------------------------------ mode selection
   openModeSelect() {
     this.music.setState('menu');
@@ -439,12 +777,20 @@ class Game {
     const rivals = mode === 'quick' ? this.save.get('quickRivals', 3) : 3;
     this._loadTrack(trackId, false, { solo: mode === 'timetrial', rivals });
     if (mode === 'timetrial') {
+      // a downloaded world ghost (online screen) takes priority over the
+      // local record; both feed the same GhostPlayer.
       const rec = this.records.get(trackId);
-      this.ghostPlayer = rec?.ghost
-        ? new GhostPlayer(deserializeGhost(rec.ghost), FIXED_DT)
-        : null;
+      if (this.downloadedGhost && this.downloadedGhost.frames?.length) {
+        this.ghostPlayer = new GhostPlayer(this.downloadedGhost.frames, FIXED_DT);
+        this.ghostLabel = this.downloadedGhost.name;
+      } else {
+        this.ghostPlayer = rec?.ghost ? new GhostPlayer(deserializeGhost(rec.ghost), FIXED_DT) : null;
+        this.ghostLabel = null;
+      }
+      this.downloadedGhost = null;
     } else {
       this.ghostPlayer = null;
+      this.ghostLabel = null;
     }
     this.startRace();
   }
@@ -515,6 +861,18 @@ class Game {
       karts: this.race.karts,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
+
+    // Arena drivers get their own brain: tactical objectives instead of the
+    // racing line (which is meaningless in a free-roaming arena).
+    for (const kart of this.race.karts) {
+      if (!kart.isPlayer) {
+        kart.battleAi = new BattleAI(kart.vehicle, this.track, kart.ai ? kart.ai.personalityKey : 'balanced');
+        kart.battleAi.setDifficulty(this.save.get('difficulty', 'normal'));
+      }
+    }
+    // capture-zone rings (only the 'zones' mode has zones)
+    if (!this.zoneFX) this.zoneFX = new BattleZoneFX(this.scene);
+    this.zoneFX.build(this.battle.zones || []);
     this._battleOverT = 0;
     this._bLastCount = 99;
     this._battleResultsShown = false;
@@ -533,6 +891,43 @@ class Game {
     document.getElementById('hud-pos').classList.toggle('hidden', on);
     document.getElementById('hud-lap').classList.toggle('hidden', on);
     document.getElementById('battle-info').classList.toggle('hidden', !on);
+    this.hud.showBattleBoard(!!on);
+    if (!on) this.hud.setBattleBoard([]);
+  }
+
+  // Live arena scoreboard: every kart, its objective value and a progress bar.
+  _updateBattleBoard() {
+    const b = this.battle;
+    if (!b) return;
+    const mode = b.mode.id;
+    const rows = b.standings().map((row) => {
+      const value = mode === 'energy'
+        ? this.i18n.t('battle.cores', { cores: row.cores, goal: b.mode.goal })
+        : (mode === 'zones' || mode === 'score')
+          ? this.i18n.t('gp.points', { points: Math.floor(row.score) })
+          : `${this.i18n.t('battle.hp')} ${Math.ceil(row.hp)}`;
+      let bar = null;
+      if (mode === 'energy') bar = row.cores / b.mode.goal;
+      else if (Number.isFinite(row.hp)) bar = row.hp / (row.hpMax || 1);
+      return {
+        name: this.i18n.t(row.kart.nameKey),
+        value,
+        bar,
+        isPlayer: row.kart.isPlayer,
+        eliminated: row.eliminated,
+      };
+    });
+    this.hud.setBattleBoard(rows);
+  }
+
+  // Character vocalizations: wordless synthesized reactions using each
+  // pilot's voice profile. Rival reactions fade with distance.
+  _vocalize(kart, kind) {
+    if (!kart || !kart.characterId) return;
+    const character = getCharacter(kart.characterId);
+    if (!character || !character.voice) return;
+    const distance = kart.isPlayer ? 0 : kart.vehicle.pos.distanceTo(this.playerKart.vehicle.pos);
+    this.audio.vocalize(character.voice, kind, { distance });
   }
 
   _updateBattleHud() {
@@ -544,12 +939,16 @@ class Game {
     if (info.timer > 0) line += ` · ${formatTime(info.timer)}`;
     if (b.mode.id === 'energy') {
       line += ` · ${this.i18n.t('battle.cores', { cores: info.primary, goal: info.goal })}`;
-    } else if (b.mode.id === 'zones' || b.mode.id === 'score') {
+    } else if (b.mode.id === 'zones') {
+      line += ` · ${this.i18n.t('battle.zonesHeld', { held: info.zonesHeld, total: info.zonesTotal })}`
+        + ` · ${this.i18n.t('battle.hp')} ${info.hp}`;
+    } else if (b.mode.id === 'score') {
       line += ` · ${this.i18n.t('gp.points', { points: info.primary })} · ${this.i18n.t('battle.hp')} ${info.hp}`;
     } else {
       line += ` · ${this.i18n.t('battle.hp')} ${info.hp}`;
     }
     el.textContent = line;
+    this._updateBattleBoard();
   }
 
   _battleStep(dt) {
@@ -576,7 +975,9 @@ class Game {
       const st = b.per.get(kart);
       let input = ZERO;
       if (racing && !st.eliminated) {
-        input = kart.isPlayer ? this._battleInput : kart.ai.update(dt, this.race.karts, true, this.items);
+        input = kart.isPlayer
+          ? this._battleInput
+          : (kart.battleAi || kart.ai).update(dt, this.race.karts, b, this.items, this.track.def);
       }
       kart.vehicle.step(dt, input, false);
       enforceArenaWalls(this.track.def, kart.vehicle);
@@ -586,6 +987,7 @@ class Game {
       this.items.update(dt, this.race.karts, b.time);
       this._battleObstacleHits(b, dt);
     }
+    if (this.zoneFX) this.zoneFX.update(this.race.karts, this.time);
     this.track.update(dt, this.time);
   }
 
@@ -696,6 +1098,12 @@ class Game {
   }
 
   restartCurrentRace() {
+    if (this.netRace) {
+      // a live race cannot be restarted locally: leave the room instead
+      this._leaveNetRace();
+      this.returnToMenu();
+      return;
+    }
     if (this.mode === 'battle') {
       this._startBattle();
       return;
@@ -723,6 +1131,7 @@ class Game {
   }
 
   returnToMenu() {
+    this._leaveNetRace();
     this.appState = 'menu';
     this.race.state = 'idle';
     this.race.paused = false;
@@ -735,6 +1144,7 @@ class Game {
     this.itemVisuals.update(0, this.time, this.items);
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;
     this._removeGhostVis();
+    if (this.zoneFX) this.zoneFX.clear();
     if (this.battle) {
       this.battle = null;
       this._setBattleHud(false);
@@ -762,10 +1172,18 @@ class Game {
   onRaceEvent(type, payload) {
     if (type === 'raceGo') {
       this.music.setState('racing');
+      this._vocalize(this.playerKart, 'start');
+      for (const kart of this.race.karts) if (!kart.isPlayer) this._vocalize(kart, 'start');
     } else if (type === 'playerFinalLap') {
       this.music.setState('finalLap');
+      this._vocalize(this.playerKart, 'hype');
     } else if (type === 'playerFinished') {
       this.music.setState(payload.pos <= 3 ? 'victory' : 'defeat');
+      this._vocalize(this.playerKart, payload.pos === 1 ? 'win' : 'lose');
+      if (this.rankedMatch) this._submitRankedResult(payload.pos);
+      if (this.netRace && this.net) {
+        this.net.reportFinish({ time: this.race.raceTime, position: payload.pos });
+      }
     } else if (type === 'lapComplete') {
       if (payload.kart.isPlayer) recordStats(this.save, { laps: 1 });
       if (this.mode === 'timetrial' && this.ttSession && payload.kart.isPlayer) {
@@ -804,6 +1222,7 @@ class Game {
         });
       }
     } else if (type === 'battleKO') {
+      this._vocalize(payload.kart, 'lose');
       this.hud.notify(this.i18n.t('battle.ko', { name: this.i18n.t(payload.kart.nameKey) }));
       this.burstAt(payload.kart.vehicle.pos, 0xff5d5d, 24);
       this.camCtl.addTrauma(0.4);
@@ -854,6 +1273,7 @@ class Game {
       recordStats(this.save, {
         races: 1, wins: playerPos === 1 ? 1 : 0,
         podiums: playerPos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+        nightWins: playerPos === 1 && NIGHT_THEMES.has(this.track.def.theme) ? 1 : 0,
       });
 
       const div = document.createElement('div');
@@ -964,6 +1384,7 @@ class Game {
       recordStats(this.save, {
         races: 1, wins: pos === 1 ? 1 : 0,
         podiums: pos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+        nightWins: pos === 1 && NIGHT_THEMES.has(this.track.def.theme) ? 1 : 0,
       });
       this._finishProgression({ kind: 'race', pos, rivals: order.length - 1 },
         { boardTime: pst.finishTime });
@@ -1020,6 +1441,7 @@ class Game {
       if (this.mode === 'battle' && this.battle && payload.victim) {
         this.battle.hitLanded(payload.attacker || null, payload.victim);
       }
+      if (payload.victim) this._vocalize(payload.victim, 'hit');
       if (payload.victim?.isPlayer) {
         this.hud.setItem(null);
         this.hud.notify(this.i18n.t('race.hitBy', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
@@ -1076,6 +1498,12 @@ class Game {
         this.audio.setDrift(false, 0);
       }
 
+      // pilot reaction when a boost lights up
+      if (v.fx && v.fx.boostStart) {
+        const kart = this.race.karts.find((k) => k.vehicle === v);
+        if (kart && Math.random() < 0.55) this._vocalize(kart, 'boost');
+      }
+
       // boost exhaust flames
       if (v.boost.boosting) {
         for (let i = 0; i < 2; i++) {
@@ -1117,6 +1545,12 @@ class Game {
 
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
+    } else if (this.appState === 'garage') {
+      // garage: only the preview canvas animates, the race world is frozen
+      if (this.input.wasPressed('pause')) this.closeGarage();
+      if (this.preview) this.preview.update(rawDt, this.time);
+      this.input.endFrame();
+      return;
     } else if (this.mode === 'battle' && this.battle) {
       // ---------------------------------------------------------- battle mode
       if (this.input.wasPressed('pause')) {
@@ -1205,6 +1639,13 @@ class Game {
           if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
         }
         this.perFrameFX(rawDt);
+
+        // live netplay: remote karts follow relay snapshots, and our own kart
+        // goes out at the session's fixed rate.
+        if (this.netRace) {
+          this._updateNetKarts(rawDt);
+          this._sendNetState();
+        }
 
         // ghost playback (time trial)
         if (this.ghostPlayer && this.ghostVis && this.race.state !== 'idle') {

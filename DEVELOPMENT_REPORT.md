@@ -1,8 +1,18 @@
-# Sunforge Racers — Development Report (Vertical Slice)
+# Sunforge Racers — Development Report
 
-## What was implemented
+Started as a vertical slice (one pilot, one kart, one track). It is now a
+complete original arcade kart racer: **14 pilots, 8 chassis, 12 wheel sets,
+33 cosmetic parts, 16 tracks, 6 Grand Prix cups, 22 original power-ups, 4
+battle arenas with 5 battle modes, time trials with ghosts, achievements,
+progression, a garage, a records browser, and an online stack (leaderboards,
+ranked seasons, world ghosts, live lobby relay)** — EN/IT throughout, zero
+copy-pasted content, zero paid unlocks.
 
-Everything from the vertical-slice spec, in a genuinely playable form:
+The sections below keep the original vertical-slice report (the foundation that
+is still the core of the game: vehicle physics, drift, camera, race logic and
+AI are unchanged by design) and then document each expansion increment.
+
+## What was implemented (vertical slice, preserved)
 
 | Requirement | Status |
 |---|---|
@@ -136,29 +146,29 @@ HUD re-renders itself live. The choice persists via `SaveManager`
 (localStorage, with in-memory fallback). Settings → Language offers
 English / Italiano.
 
-## Known limitations
+## Known limitations (current)
 
-- Track is a single loop defined by one spline + data; no track editor.
-- No items/power-ups (intentionally out of scope for the slice).
-- AI never takes the shortcut (by design it follows the main racing line).
-- No gamepad/touch input yet; keyboard only.
-- Blob shadows instead of real shadow mapping (chosen for a stable 60 FPS).
-- Audio is synthesized placeholder-quality by design.
-- One camera collision approximation (box colliders), which covers the
-  tunnel/arches/monuments but not every decorative rock.
+- Tracks are pure data on one spline pipeline; there is no track editor.
+- AI drivers follow the racing line and never take shortcuts (by design).
+- Keyboard only; there is no gamepad/touch layer or rebinding UI yet.
+- Blob shadows instead of shadow mapping (chosen for a stable 60 FPS).
+- Audio and pilot "voices" are synthesized by design (no recorded assets).
+- Netplay is a client-authoritative relay: remote karts are interpolated
+  ghosts, so races are not collision-arbitrated between machines and there is
+  no rollback. See Increment 9 for the exact contract.
+- The online server stores state in a single JSON file; a real deployment
+  would swap `OnlineStore` for a database (the API stays identical).
 
 ## What should be implemented next
 
-1. **Items & combat layer** (item boxes, projectiles, hit states) — the FX,
-   event and HUD hooks are already in place.
-2. **Track 2 + theming pipeline** — extract track definition into pure data
-   (control points, features, themes) to prove content scalability.
+1. Server-side ghost validation (re-simulate a submitted ghost before it is
+   allowed on the leaderboard) and a moderation/ban list for names.
+2. Rollback or server-authoritative netcode for full contact racing; the
+   relay payload (`state` samples) is already the right shape for it.
 3. Gamepad + touch controls, input rebinding UI.
 4. Real-time shadows / baked AO pass and post-FX (bloom for boost pads).
-5. Music tracks per theme + positional audio for nearby AI karts.
-6. Best-lap ghost recording/playback.
-7. Split-screen or simple online time-trial leaderboards.
-8. Truck/physics variants (handling/acceleration/top-speed kart classes).
+5. Split-screen for local multiplayer.
+6. Deeper progression: daily challenges and cosmetic-only rewards.
 
 ---
 
@@ -256,3 +266,128 @@ incrementally around it, each increment tested before the next begins.
   notifications, battle results with progression awards.
 - Tests: 27 battle-logic checks + 29 arena checks (build, drivability,
   containment, real-geometry zones).
+
+## Increment 6 — Garage, pilot select and live loadouts
+
+- `src/garage.js` — the customization model: seven pages (pilot, chassis,
+  wheels, paint, decal, exhaust, effect), unlock gating for default/level/cup/
+  achievement unlocks, attribute deltas against what is currently equipped,
+  a derived **performance preview** (km/h top speed, 0-100 s, cornering, grip,
+  off-road speed, drift charge time, mass), randomize/reset, and persistence
+  under the save key `loadout`.
+- `src/kartPreview.js` — a rotating showroom: its own WebGL canvas, the same
+  `buildKartFromLoadout` mesh and the same `updateKartVisual` /
+  `animateCharacter` code the race uses, drag-to-rotate, wheel zoom, and a
+  pilot close-up focus mode.
+- `src/ui/garageUI.js` — the DOM layer. Every string comes from the
+  localization dictionary (the purity test walks the rendered tree).
+- `src/roster.js` + `src/content/rivals.js` — the grid is now built from real
+  pilots: the player drives their garage build, each rival drives that
+  character's signature loadout with its own physics params, personality and
+  silhouette. The player entry keeps the `ai.you` name key so Grand Prix
+  scoring, records and results are unchanged.
+- `src/config.js` — three more AI personalities (speedster, technical,
+  wildcard) alongside the original three, all bound by the same rule:
+  `targetSpeed <= 1.0`, no difficulty or personality ever grants speed.
+- Tests: 71 garage checks, including a measured proof that a top-speed build
+  really is faster (full-throttle run down the racing line) while the heavier
+  build still covers comparable ground, plus dynamic unlock resolution checks
+  against the live content tables.
+
+## Increment 7 — Records, achievements and leaderboard browser
+
+- `src/ui/recordsUI.js` + a records screen: per-track records with medals,
+  ghost availability, the local top-10 board, all achievements with progress,
+  lifetime statistics and progression (level, XP to next).
+- The board is served through the same provider contract the online features
+  use, so it shows remote results when a server is attached and falls back to
+  local records with an honest "source: local" note when it is not.
+- 35 new localized strings; the localization purity walker covers the screen.
+
+## Increment 8 — Battle polish: arena AI, capture-zone visuals, live scoreboard
+
+- `src/itemAI.js` — the item-usage heuristic extracted from the racing AI so
+  racing and battle drivers make item decisions through one code path.
+  Skill scales *when* an item is used, never what the roulette grants.
+- `src/battleAI.js` — arena drivers with tactical objectives instead of a
+  racing line: `chooseObjective()` is a pure function (energy cores, hunting
+  the weakest kart, fleeing in survival, capturing/defending/holding zones,
+  crate economics). Pure tactics means the whole layer is unit-testable and
+  deterministic under a seeded RNG.
+- Objective-aware driving: an arrival curve so a driver parks on a capture ring
+  instead of orbiting out of range, wall-avoidance blending near the arena
+  edge, obstacle dodging and the same stuck-recovery the racing AI uses.
+- `src/battleFX.js` — capture-zone geometry (fill disc, owner-coloured ring,
+  pulsing halo). `zoneVisualState()` maps battle state to colour/fill/pulse as
+  a pure function.
+- Live arena scoreboard in the HUD (HP bars / cores / points per kart) and a
+  zone counter for Zone Control.
+- Mode balance fixes found by headless simulation: Energy Rush's goal now
+  scales to a ~60 s round with six karts (was over in ~30 s), and Survival's
+  decay drains to the last HP point instead of eliminating everyone on a
+  timer, so the mode is decided by hits as designed.
+- Character vocalizations: every pilot's voice profile is finally used -
+  wordless synthesized reactions (start, boost, hit, hype, win, lose) with
+  distance falloff, so a crowded grid does not turn into noise.
+- Tests: 25 arena-AI checks (objective choice per mode, deterministic headless
+  arenas that actually bank cores / capture rings / land hits, no illegal
+  input, no speed cheats, containment) + the existing 27 battle-logic checks.
+
+## Increment 9 — Online stack: API, ranked seasons, world ghosts, netplay relay
+
+The client contract that existed since Increment 5 (`src/online.js`) now has a
+real backend, all of it zero-dependency and inside `server.mjs`:
+
+- `src/net/store.js` — the data + rules layer: time-trial boards (top 25 with
+  optional ghosts), monthly ranked seasons with Elo-style deltas
+  (`K=32`, floor 5, unknown opponents treated as ladder average), ladder
+  pruning, JSON persistence with atomic writes, and sanitisation of every
+  client-supplied field (names, times, ghost frames).
+- `src/net/api.js` — the HTTP API behind `/api/*`:
+  `GET /ping`, `GET|POST /leaderboard/:trackId`, `GET /leaderboard/:trackId/ghost?rank=N`,
+  `GET /ranked/season?player=`, `GET /ranked/ladder`, `POST /ranked/match`,
+  `GET /rooms`, `GET /stats`. Small bodies, per-IP write budget, no CORS
+  wildcard, no stack traces to clients.
+- `src/net/ws.js` — a minimal RFC 6455 WebSocket server (handshake, masked
+  frames, ping/pong, close, 64 KB payload cap) so the game needs no npm
+  packages.
+- `src/net/rooms.js` + `src/net/relay.js` — lobbies (8 racers, host-started,
+  look-alike-free room codes) and the message protocol: join, state samples at
+  ~20 Hz with a flood guard, start, finish, and server-decided standings.
+- `src/netplay.js` — the browser side: `NetSession` (connect/join/send/
+  receive) and `interpolate()`, which renders remote karts ~120 ms in the past
+  from snapshots. Remote karts are visual-only, so packet loss degrades into a
+  laggy ghost instead of a desync.
+- `src/ui/onlineUI.js` + online screen — server status and latency, ranked
+  standing (season, rank, points, W/L), ladder, world-ghost download (which
+  feeds the existing `GhostPlayer` in time trial), racer tag, and the lobby
+  (create/join, roster, host start). Offline, the screen says so and the game
+  keeps using local records: `OnlineService` probes `/api/ping` and switches
+  providers at runtime.
+- Tests: 96 online checks - store rules, Elo maths, the API over real HTTP
+  through `HttpProvider`, the relay with two real WebSocket clients
+  (lobby -> start -> finish -> standings), persistence to disk, and the
+  offline fallback paths.
+
+## Fixed along the way (regression guards)
+
+Building Increment 9 exposed that the game entry point had been broken since
+the previous commit and no test noticed, because every suite imported *modules*
+and none imported the game:
+
+- `src/main.js` had a duplicated tail fragment - a syntax error that stopped
+  the game booting in any browser.
+- `src/main.js` also used `Garage`, `GarageUI`, `RecordsUI`, `KartPreview`,
+  `buildRaceRoster`, `buildLoadout`, `buildKartFromLoadout` and `getCharacter`
+  without importing them, so the garage/records increment could never run.
+- The main-menu buttons for Garage and Records were never bound to their
+  screens.
+
+Three new guards make that class of failure impossible to ship again:
+`test/syntax.test.mjs` (parses every shipped file, checks that every button in
+index.html is wired, that every `data-i18n` key resolves, and that every key
+referenced in code exists), `test/entry.test.mjs` (boots the real entry point
+against a fake WebGL context and a stub DOM, then verifies the DOM contract and
+the menu wiring), and the `test/garage.test.mjs` physics measurement fix (the
+"faster build" check now measures a full-throttle run instead of an AI lap,
+which was line-limited and could not tell builds apart).
