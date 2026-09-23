@@ -12,6 +12,8 @@ import { InputManager } from './input.js';
 import { AudioManager } from './audio.js';
 import { TrackManager } from './track.js';
 import { buildEnvironment } from './environment.js';
+import { buildThemedEnvironment } from './environment2.js';
+import { getTrackDef } from './content/trackDefs.js';
 import { buildKart, buildKartFromLoadout, updateKartVisual } from './kartMesh.js';
 import { animateCharacter } from './characterMesh.js';
 import { VehicleController } from './vehicle.js';
@@ -47,20 +49,61 @@ class Game {
     this.camera = new THREE.PerspectiveCamera(
       CONFIG.camera.fovBase, window.innerWidth / window.innerHeight, 0.1, 1600);
 
-    // world --------------------------------------------------------------------
-    this.track = new TrackManager();
-    this.env = buildEnvironment(this.scene, this.track);
-    this.camCtl = new CameraController(this.camera, this.track);
-    this.camCtl.setColliders(this.env.colliders);
-    this.camCtl.distance = this.save.get('cameraDistance', CONFIG.camera.distance);
-    this.camCtl.height = this.save.get('cameraHeight', CONFIG.camera.height);
-
+    // shared render resources (survive track switches) ---------------------------
     this.dust = new ParticlePool(this.scene, CONFIG.particles.dustCount, false);
     this.sparks = new ParticlePool(this.scene, CONFIG.particles.sparkCount, true);
-
     this.hud = new HUDManager(this.i18n);
 
-    // items (power-ups) ---------------------------------------------------------
+    this.trackId = this.save.get('lastTrack', 'sunforge_circuit');
+    this._loadTrack(this.trackId, true);
+
+    this.bindUI();
+    window.addEventListener('resize', () => this.onResize());
+
+    this.clock = new THREE.Clock();
+    this.accumulator = 0;
+    this.time = 0;
+    this.renderer.setAnimationLoop(() => this.frame());
+  }
+
+  // --------------------------------------------------------------- world load
+  // (Re)builds track + environment + items + karts for a track definition id.
+  // The vehicle physics, drift, camera and race systems are reused untouched;
+  // only world content swaps.
+  _loadTrack(trackId, first = false) {
+    const def = getTrackDef(trackId);
+    this.trackId = def.id;
+
+    // dispose previous world (environment group + kart meshes)
+    if (this.env) this.scene.remove(this.env.group);
+    if (this.kartVisuals) {
+      for (const vis of this.kartVisuals.values()) {
+        this.scene.remove(vis.group);
+        this.scene.remove(vis.shadow);
+      }
+    }
+    if (this.itemVisuals) this.itemVisuals.dispose();
+
+    this.track = new TrackManager(def);
+
+    // Route rendering: the original Sunforge desert keeps its bespoke
+    // renderer; every other theme uses the generic themed builder.
+    if (def.id === 'sunforge_circuit') {
+      this.env = buildEnvironment(this.scene, this.track);
+    } else {
+      this.env = buildThemedEnvironment(this.scene, this.track, this.i18n ? this.i18n.t(def.nameKey).toUpperCase() : def.id.toUpperCase());
+    }
+
+    if (first) {
+      this.camCtl = new CameraController(this.camera, this.track);
+      this.camCtl.distance = this.save.get('cameraDistance', CONFIG.camera.distance);
+      this.camCtl.height = this.save.get('cameraHeight', CONFIG.camera.height);
+    } else {
+      this.camCtl.track = this.track;
+    }
+    this.camCtl.setColliders(this.env.colliders);
+
+    // items (power-ups) --------------------------------------------------------
     this.items = new ItemSystem({
       track: this.track,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
@@ -70,6 +113,7 @@ class Game {
     this.items.setBoxes(this.track.itemBoxes);
     this.itemVisuals = new ItemVisuals(this.scene);
     this.itemVisuals.setBoxes(this.items.boxes);
+    for (const m of this.itemVisuals.boxMeshes) m.visible = false;   // shown on race start
 
     // karts ---------------------------------------------------------------------
     this.kartVisuals = new Map();
@@ -84,17 +128,17 @@ class Game {
       items: this.items,
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
-    for (const def of defs) {
-      const vehicle = new VehicleController(this.track, def.ai === null);
-      const vis = buildKart(def.color, def.accent, def.pilot);
+    for (const d of defs) {
+      const vehicle = new VehicleController(this.track, d.ai === null);
+      const vis = buildKart(d.color, d.accent, d.pilot);
       this.scene.add(vis.group);
       this.scene.add(vis.shadow);
       this.kartVisuals.set(vehicle, vis);
       const kart = {
         vehicle,
-        ai: def.ai ? new AIController(vehicle, this.track, def.ai) : null,
-        nameKey: def.nameKey,
-        isPlayer: def.ai === null,
+        ai: d.ai ? new AIController(vehicle, this.track, d.ai) : null,
+        nameKey: d.nameKey,
+        isPlayer: d.ai === null,
         charVis: vis.charVis || null,
       };
       this.race.registerKart(kart);
@@ -104,14 +148,6 @@ class Game {
     // place karts on the grid for the menu backdrop
     const grid = this.track.startGrid();
     this.race.karts.forEach((k, i) => k.vehicle.place(grid[i]));
-
-    this.bindUI();
-    window.addEventListener('resize', () => this.onResize());
-
-    this.clock = new THREE.Clock();
-    this.accumulator = 0;
-    this.time = 0;
-    this.renderer.setAnimationLoop(() => this.frame());
   }
 
   // --------------------------------------------------------------------- UI

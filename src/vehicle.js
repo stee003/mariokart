@@ -189,12 +189,18 @@ export class VehicleController {
     let grip = onRoad ? this.params.traction : this.params.offTrackTraction;
     if (mods?.gripMult) grip *= mods.gripMult;
     if (drifting) grip *= this.driftMods?.gripMult ?? CONFIG.drift.gripMult;
+    const zoneFx = prevSurf.fx;
+    if (zoneFx && zoneFx.gripMult !== 1) grip *= zoneFx.gripMult;   // slippery track zones
     latSpeed *= Math.exp(-grip * dt);
 
     // --- integrate horizontal ----------------------------------------------
     const nf = this.forward(_fwd);   // yaw may have changed
     const nr = this.right(_right);
     this.vel.copy(nf).multiplyScalar(fSpeed).addScaledVector(nr, latSpeed);
+    if (zoneFx) {
+      if (zoneFx.wind) this.vel.addScaledVector(prevSurf.right, zoneFx.wind * dt);  // crosswind zones
+      if (zoneFx.push) this.vel.addScaledVector(prevSurf.dir, zoneFx.push * dt);    // currents / conveyors
+    }
     this.pos.addScaledVector(this.vel, dt);
     this.fSpeed = fSpeed;
     this.latSpeed = latSpeed;
@@ -227,7 +233,7 @@ export class VehicleController {
       this.onRamp = surf.onRamp;
     } else {
       this.airTime += dt;
-      this.vy -= CONFIG.air.gravity * dt;
+      this.vy -= CONFIG.air.gravity * dt * (surf.fx?.gravMult ?? 1);   // low-gravity zones
       this.y += this.vy * dt;
 
       // aerial trick

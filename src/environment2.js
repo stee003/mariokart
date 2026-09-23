@@ -1,0 +1,700 @@
+// ============================================================================
+// Themed environment renderer. Builds the world for any TrackManager def
+// from a per-theme "kit" (sky, fog, lights, ground, prop archetypes).
+// The original Sunforge desert stays in environment.js - main.js routes
+// sunforge_circuit there and every other track here.
+//
+// Shared construction (road ribbon, curbs, ramps, pads, finish, banner,
+// tunnels, obstacle meshes) is theme-parameterized; props give each
+// environment its own silhouette and environmental storytelling.
+// ============================================================================
+
+import * as THREE from '../lib/three.module.js';
+
+const UP = new THREE.Vector3(0, 1, 0);
+const yawFor = (dir) => Math.atan2(dir.x, dir.z);
+
+// ----------------------------------------------------------------------------
+// Theme kits: colors + prop builders. Prop fns receive (group, track, rnd).
+// ----------------------------------------------------------------------------
+const KITS = {
+  forest: {
+    sky: ['#7fb2e0', '#bfe0d8', '#e8f0c8', '#d8e8b0'], fog: [0xbcd8b4, 140, 620],
+    hemi: [0xd8f0d0, 0x4a6a3a, 1.0], sun: [0xfff4d8, 1.15], sunPos: [120, 220, -60],
+    ground: 0x6a8f4a, road: [0.42, 0.44, 0.4], curbA: 0xe8e0d0, curbB: 0x4f9e4f,
+  },
+  city: {
+    sky: ['#0a0e2a', '#1a2050', '#3a2a6a', '#8a4a8a'], fog: [0x241a3a, 130, 560],
+    hemi: [0x8a8aff, 0x1a1030, 0.8], sun: [0xa0b0ff, 0.8], sunPos: [-140, 180, 120],
+    ground: 0x14141e, road: [0.3, 0.31, 0.36], curbA: 0xff5df1, curbB: 0x2fd8c8,
+  },
+  mountain: {
+    sky: ['#6aa0d8', '#a8c8e8', '#e8e0d0', '#f0e8d8'], fog: [0xc8d4e0, 150, 680],
+    hemi: [0xe8f0ff, 0x6a7a8a, 1.0], sun: [0xfff8e8, 1.3], sunPos: [160, 260, 80],
+    ground: 0x8a9078, road: [0.5, 0.48, 0.44], curbA: 0xd8d0c0, curbB: 0xb0483a,
+  },
+  volcano: {
+    sky: ['#1a0a0a', '#3a1210', '#6a2410', '#a04818'], fog: [0x3a1810, 120, 520],
+    hemi: [0xff8a50, 0x2a0a08, 0.85], sun: [0xff6a30, 1.0], sunPos: [-100, 160, -140],
+    ground: 0x241412, road: [0.32, 0.24, 0.22], curbA: 0xff5d2a, curbB: 0x3a2a28,
+  },
+  underwater: {
+    sky: ['#04182a', '#083858', '#0e5a80', '#1a7aa0'], fog: [0x0a4a68, 90, 460],
+    hemi: [0x8ad0e8, 0x0a2a3a, 0.9], sun: [0xa0e0f0, 0.85], sunPos: [60, 240, 40],
+    ground: 0x1a4a5a, road: [0.3, 0.42, 0.46], curbA: 0x40f0e0, curbB: 0x2a8fa8,
+  },
+  factory: {
+    sky: ['#2a2622', '#4a4238', '#6a5c48', '#8a7a5c'], fog: [0x4a4238, 110, 500],
+    hemi: [0xf0d8a0, 0x3a3228, 0.85], sun: [0xffd8a0, 1.0], sunPos: [100, 180, -120],
+    ground: 0x3a3632, road: [0.38, 0.36, 0.34], curbA: 0xf0c820, curbB: 0x2b2530,
+  },
+  islands: {
+    sky: ['#4da3e8', '#8ac8f0', '#d8ecf8', '#fff0d8'], fog: [0xcfe4f4, 160, 700],
+    hemi: [0xfff0d8, 0x6a9ac8, 1.0], sun: [0xfff4d0, 1.25], sunPos: [140, 240, -80],
+    ground: null, road: [0.72, 0.66, 0.5], curbA: 0xe8d8a8, curbB: 0x4a9e8a,
+  },
+  ruins: {
+    sky: ['#5d94d0', '#a0c4e4', '#f0dcb8', '#ffdca0'], fog: [0xdcc8a0, 150, 640],
+    hemi: [0xffe8c0, 0x8a6a48, 0.95], sun: [0xfff0c8, 1.2], sunPos: [130, 200, -90],
+    ground: 0xc8a878, road: [0.62, 0.55, 0.44], curbA: 0xd8c8a8, curbB: 0x9c6b3c,
+  },
+  storm: {
+    sky: ['#10141c', '#242c3a', '#3a4454', '#5a6472'], fog: [0x2c3440, 120, 540],
+    hemi: [0xa0b0c8, 0x1a2028, 0.8], sun: [0xc8d4e8, 0.7], sunPos: [-80, 200, 60],
+    ground: 0x3a4248, road: [0.36, 0.38, 0.42], curbA: 0xf0e04a, curbB: 0x2c3a44,
+  },
+  crystal: {
+    sky: ['#0a0a1e', '#141438', '#241a54', '#3a2a6a'], fog: [0x1a1434, 90, 440],
+    hemi: [0xb0a0ff, 0x141024, 0.85], sun: [0xc0b0ff, 0.9], sunPos: [80, 180, -100],
+    ground: 0x181428, road: [0.34, 0.3, 0.44], curbA: 0xc8b0ff, curbB: 0x5a4a8a,
+  },
+  space: {
+    sky: ['#000004', '#04060e', '#0a0c18', '#101420'], fog: [0x06080f, 200, 900],
+    hemi: [0x8a9aff, 0x080a14, 0.7], sun: [0xdde4ff, 1.1], sunPos: [-120, 200, 140],
+    ground: 0x10141c, road: [0.3, 0.32, 0.4], curbA: 0x66e8ff, curbB: 0x2a3a5a,
+  },
+};
+
+function seeded(seed) {
+  let s = seed;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+// ----------------------------------------------------------------------------
+// Shared builders (parameterized by kit)
+// ----------------------------------------------------------------------------
+function ribbon(group, samples, offsetA, offsetB, colorFn, closed, roadMat, yOff = 0.02) {
+  const n = samples.length;
+  const count = closed ? n + 1 : n;
+  const posArr = new Float32Array(count * 6);
+  const colArr = new Float32Array(count * 6);
+  for (let i = 0; i < count; i++) {
+    const sm = samples[i % n];
+    const a = sm.pos.x + sm.right.x * offsetA(sm);
+    const az = sm.pos.z + sm.right.z * offsetA(sm);
+    const b = sm.pos.x + sm.right.x * offsetB(sm);
+    const bz = sm.pos.z + sm.right.z * offsetB(sm);
+    const y = sm.pos.y + yOff;
+    posArr.set([a, y, az, b, y, bz], i * 6);
+    const ca = colorFn(sm, i % n, 1), cb = colorFn(sm, i % n, -1);
+    colArr.set([ca[0], ca[1], ca[2], cb[0], cb[1], cb[2]], i * 6);
+  }
+  const segs = closed ? n : n - 1;
+  const idx = [];
+  for (let i = 0; i < segs; i++) {
+    const o = i * 2;
+    idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, roadMat);
+  group.add(mesh);
+  return mesh;
+}
+
+function buildSky(scene, group, kit) {
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  kit.sky.forEach((col, i) => grad.addColorStop(i / (kit.sky.length - 1), col));
+  g.fillStyle = grad; g.fillRect(0, 0, 4, 256);
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(860, 20, 14),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), side: THREE.BackSide, fog: false })
+  );
+  group.add(sky);
+  scene.fog = new THREE.Fog(kit.fog[0], kit.fog[1], kit.fog[2]);
+  scene.add(new THREE.HemisphereLight(kit.hemi[0], kit.hemi[1], kit.hemi[2]));
+  const sun = new THREE.DirectionalLight(kit.sun[0], kit.sun[1]);
+  sun.position.set(...kit.sunPos);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(kit.hemi[0], 0.18));
+  return sun;
+}
+
+function buildRoad(group, track, kit) {
+  const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  const S = track.samples;
+  const hw = (sm) => sm.width / 2;
+  const noise = (i) => (((i * 7919) % 13) / 13 - 0.5) * 0.05;
+  const base = kit.road;
+
+  ribbon(group, S, (sm) => hw(sm) - 1.25, (sm) => -(hw(sm) - 1.25), (sm, i) => {
+    const v = 1 + noise(i);
+    return [base[0] * v, base[1] * v, base[2] * v];
+  }, true, roadMat);
+  const ca = new THREE.Color(kit.curbA), cb = new THREE.Color(kit.curbB);
+  for (const sideSign of [1, -1]) {
+    ribbon(group, S,
+      (sm) => sideSign * hw(sm),
+      (sm) => sideSign * (hw(sm) - 1.25),
+      (sm, i) => {
+        const c = Math.floor(sm.s / 3.5) % 2 === 0 ? ca : cb;
+        return [c.r, c.g, c.b];
+      }, true, roadMat, 0.03);
+  }
+  ribbon(group, S, () => 0.22, () => -0.22, (sm) => {
+    const on = Math.floor(sm.s / 5) % 2 === 0;
+    return on ? [0.95, 0.92, 0.82] : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.6];
+  }, true, roadMat, 0.035);
+
+  if (track.shortcut) {
+    ribbon(group, track.shortcut.samples, () => track.shortcut.halfW, () => -track.shortcut.halfW,
+      (sm, i) => {
+        const v = 1 + noise(i + 3);
+        return [base[0] * 1.1 * v, base[1] * 1.0 * v, base[2] * 0.85 * v];
+      }, false, roadMat, 0.03);
+  }
+}
+
+function buildFinishAndBanner(group, track, bannerText) {
+  const fin = track.pointAt(0.2);
+  const checker = document.createElement('canvas');
+  checker.width = 128; checker.height = 32;
+  const cg = checker.getContext('2d');
+  for (let x = 0; x < 16; x++) for (let y = 0; y < 4; y++) {
+    cg.fillStyle = (x + y) % 2 ? '#1c1c1c' : '#f4f0e6';
+    cg.fillRect(x * 8, y * 8, 8, 8);
+  }
+  const finMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(fin.width, 3),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(checker) })
+  );
+  finMesh.rotation.x = -Math.PI / 2;
+  finMesh.rotation.z = yawFor(fin.dir);
+  finMesh.position.copy(fin.pos).setY(fin.pos.y + 0.05);
+  group.add(finMesh);
+
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x444a56, roughness: 0.7, metalness: 0.3 });
+  for (const side of [1, -1]) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.32, 7.2, 8), poleMat);
+    pole.position.copy(fin.pos).addScaledVector(fin.right, side * (fin.width / 2 + 0.8));
+    pole.position.y += 3.6;
+    group.add(pole);
+  }
+  const bc = document.createElement('canvas');
+  bc.width = 512; bc.height = 96;
+  const bg = bc.getContext('2d');
+  bg.fillStyle = '#20304a'; bg.fillRect(0, 0, 512, 96);
+  bg.fillStyle = '#8ae0ff'; bg.font = '900 48px "Trebuchet MS", sans-serif';
+  bg.textAlign = 'center'; bg.textBaseline = 'middle';
+  bg.fillText(bannerText, 256, 50);
+  const banner = new THREE.Mesh(
+    new THREE.PlaneGeometry(fin.width + 1.6, 2.2),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(bc), side: THREE.DoubleSide })
+  );
+  banner.position.copy(fin.pos).setY(fin.pos.y + 6.4);
+  banner.rotation.y = yawFor(fin.dir);
+  group.add(banner);
+}
+
+function buildRampsAndPads(group, track, state) {
+  for (const r of track.ramps) {
+    const p0 = track.pointAt(r.s0), p1 = track.pointAt(r.s1);
+    const mk = (p, latOff, y) => {
+      const v = p.pos.clone().addScaledVector(p.right, r.lat + latOff);
+      v.y = y + 0.05;
+      return v;
+    };
+    const a = mk(p0, -r.halfW, r.baseY), b = mk(p0, r.halfW, r.baseY);
+    const c = mk(p1, r.halfW, r.baseY + r.rise), d = mk(p1, -r.halfW, r.baseY + r.rise);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z,
+      a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z,
+    ]), 3));
+    geo.computeVertexNormals();
+    group.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6a7080, roughness: 0.85 })));
+    const lip = new THREE.Mesh(new THREE.PlaneGeometry(r.halfW * 2, 1.1),
+      new THREE.MeshBasicMaterial({ color: 0xffe08a }));
+    lip.rotation.x = -Math.PI / 2;
+    lip.rotation.z = yawFor(p1.dir);
+    lip.position.copy(p1.pos).addScaledVector(p1.right, r.lat);
+    lip.position.y = r.baseY + r.rise + 0.07;
+    group.add(lip);
+  }
+
+  const padCanvas = document.createElement('canvas');
+  padCanvas.width = 128; padCanvas.height = 64;
+  const pg = padCanvas.getContext('2d');
+  pg.fillStyle = '#0a5c66'; pg.fillRect(0, 0, 128, 64);
+  pg.fillStyle = '#40f0e0';
+  for (let i = 0; i < 3; i++) {
+    const x = 18 + i * 36;
+    pg.beginPath();
+    pg.moveTo(x, 8); pg.lineTo(x + 22, 32); pg.lineTo(x, 56);
+    pg.lineTo(x + 10, 32); pg.closePath(); pg.fill();
+  }
+  const padTex = new THREE.CanvasTexture(padCanvas);
+  for (const pad of track.pads) {
+    if (pad.shortcut) {
+      const sc = track.shortcut.samples;
+      const idx = Math.min(sc.length - 1, Math.floor(pad.scFrac * sc.length));
+      const sm = sc[idx];
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4.2, pad.halfW * 2),
+        new THREE.MeshBasicMaterial({ map: padTex, transparent: true, opacity: 0.95 }));
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.z = Math.atan2(-sm.dir.z, sm.dir.x);
+      mesh.position.copy(sm.pos); mesh.position.y += 0.06;
+      group.add(mesh);
+      state.padMaterials.push(mesh.material);
+      continue;
+    }
+    const p = track.pointAt(pad.s);
+    const mat = new THREE.MeshBasicMaterial({ map: padTex, transparent: true, opacity: 0.95 });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(pad.len, pad.halfW * 2), mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = Math.atan2(-p.dir.z, p.dir.x);
+    mesh.position.copy(p.pos).addScaledVector(p.right, pad.lat);
+    mesh.position.y += 0.05;
+    group.add(mesh);
+    state.padMaterials.push(mat);
+  }
+}
+
+function buildTunnel(group, track, colliders, palette = 0x6a7080) {
+  if (!track.tunnelRange) return;
+  const mat = new THREE.MeshStandardMaterial({ color: palette, roughness: 0.9, flatShading: true });
+  // adaptive arch spacing so short tunnels still get several ribs
+  const span = track.tunnelRange[1] - track.tunnelRange[0];
+  const step = Math.max(3, Math.min(6.5, span / 4));
+  for (let s = track.tunnelRange[0]; s <= track.tunnelRange[1]; s += step) {
+    const p = track.pointAt(s);
+    const yaw = yawFor(p.dir);
+    for (const side of [1, -1]) {
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 7, 1.4), mat);
+      pillar.position.copy(p.pos).addScaledVector(p.right, side * (p.width / 2 + 1.1));
+      pillar.position.y += 3.4;
+      pillar.rotation.y = yaw;
+      group.add(pillar);
+      colliders.push(new THREE.Box3().setFromObject(pillar));
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(p.width + 4.4, 1.5, 1.9), mat);
+    beam.position.copy(p.pos);
+    beam.position.y += 7.2;
+    beam.rotation.y = yaw;
+    group.add(beam);
+    colliders.push(new THREE.Box3().setFromObject(beam));
+  }
+}
+
+function buildCanyon(group, track, rockColor) {
+  if (!track.canyonRange) return;
+  let seed = 17;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const mats = [rockColor, rockColor * 0.92, rockColor * 1.08].map((c) =>
+    new THREE.MeshStandardMaterial({ color: Math.floor(c), roughness: 1, flatShading: true }));
+  for (let s = track.canyonRange[0]; s <= track.canyonRange[1]; s += 7) {
+    const p = track.pointAt(s);
+    for (const side of [1, -1]) {
+      if (rnd() < 0.12) continue;
+      const h = 8 + rnd() * 11;
+      const cliff = new THREE.Mesh(
+        new THREE.BoxGeometry(5 + rnd() * 5, h, 4 + rnd() * 4),
+        mats[Math.floor(rnd() * 3)]
+      );
+      cliff.position.copy(p.pos).addScaledVector(p.right, side * (p.width / 2 + 6 + rnd() * 5));
+      cliff.position.y = p.pos.y + h / 2 - 2;
+      cliff.rotation.y = rnd() * Math.PI;
+      group.add(cliff);
+    }
+  }
+}
+
+function buildObstacles(group, track, state) {
+  state.obstacleMeshes = [];
+  for (const o of track.obstacles) {
+    if (o.type === 'gear') {
+      const g = new THREE.Group();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x5a6070, roughness: 0.55, metalness: 0.45 });
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 1.1, 14), mat);
+      g.add(hub);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(o.armRadius * 2, 0.55, 1.1), mat);
+      arm.position.y = 0.45;
+      g.add(arm);
+      for (const side of [1, -1]) {
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8), mat);
+        tip.position.set(side * o.armRadius, 0.45, 0);
+        g.add(tip);
+      }
+      g.position.copy(o.center); g.position.y += 0.5;
+      group.add(g);
+      state.obstacleMeshes.push({ mesh: g, obstacle: o });
+    } else if (o.type === 'slider' || o.type === 'pendulum') {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(o.radius * 1.6, o.type === 'pendulum' ? 3.2 : 2.6, o.radius * 1.6),
+        new THREE.MeshStandardMaterial({ color: o.type === 'pendulum' ? 0x8a4a4a : 0x707a88, roughness: 0.8, flatShading: true })
+      );
+      mesh.position.copy(o.pos);
+      group.add(mesh);
+      state.obstacleMeshes.push({ mesh, obstacle: o });
+    } else if (o.type === 'flamejet') {
+      const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 0.8, 8),
+        new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.6, metalness: 0.5 }));
+      nozzle.position.copy(o.pos); nozzle.position.y += 0.2;
+      group.add(nozzle);
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(o.radius * 0.55, 3.4, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+      flame.position.copy(o.pos); flame.position.y += 1.9;
+      group.add(flame);
+      state.obstacleMeshes.push({ mesh: flame, obstacle: o, isFlame: true });
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Theme props - environmental storytelling per world
+// ----------------------------------------------------------------------------
+const PROPS = {
+  forest(group, track, rnd) {
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2e, roughness: 1 });
+    const leafMats = [0x3f8e4f, 0x57a85a, 0x2f7a3f].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true }));
+    for (let i = 0; i < 60; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 8 + rnd() * 30;
+      const t = new THREE.Group();
+      const h = 3 + rnd() * 4;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, h, 6), trunkMat);
+      trunk.position.y = h / 2;
+      t.add(trunk);
+      const crown = new THREE.Mesh(new THREE.ConeGeometry(1.8 + rnd() * 1.6, 3.5 + rnd() * 3, 7), leafMats[i % 3]);
+      crown.position.y = h + 1.4;
+      t.add(crown);
+      t.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      group.add(t);
+    }
+  },
+  city(group, track, rnd) {
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0x181a28, roughness: 0.6, metalness: 0.3 });
+    const winMat = new THREE.MeshBasicMaterial({ color: 0x8ae0ff });
+    const winMat2 = new THREE.MeshBasicMaterial({ color: 0xff5df1 });
+    for (let i = 0; i < 40; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 14 + rnd() * 40;
+      const h = 14 + rnd() * 46;
+      const w = 5 + rnd() * 8;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), towerMat);
+      tower.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      tower.position.y += h / 2;
+      group.add(tower);
+      for (let r = 0; r < 5; r++) {
+        const win = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.7, 0.7), rnd() > 0.5 ? winMat : winMat2);
+        win.position.copy(tower.position);
+        win.position.y = 3 + r * (h / 5.5);
+        win.position.x -= side * (w / 2 + 0.05);
+        win.rotation.y = Math.atan2(p.right.x, p.right.z) + (side > 0 ? Math.PI : 0);
+        group.add(win);
+      }
+    }
+  },
+  mountain(group, track, rnd) {
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x7a8088, roughness: 1, flatShading: true });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xf0f4f8, roughness: 0.9, flatShading: true });
+    for (let i = 0; i < 26; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 20 + rnd() * 60;
+      const h = 20 + rnd() * 40;
+      const peak = new THREE.Mesh(new THREE.ConeGeometry(10 + rnd() * 14, h, 6), rockMat);
+      peak.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      peak.position.y = p.pos.y + h / 2 - 4;
+      group.add(peak);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry((10 + rnd() * 14) * 0.35, h * 0.3, 6), snowMat);
+      cap.position.copy(peak.position); cap.position.y += h * 0.36;
+      group.add(cap);
+    }
+  },
+  volcano(group, track, rnd) {
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x241a18, roughness: 1, flatShading: true });
+    const lavaMat = new THREE.MeshBasicMaterial({ color: 0xff5d1a });
+    for (let i = 0; i < 30; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 10 + rnd() * 34;
+      if (i % 4 === 0) {
+        const pool = new THREE.Mesh(new THREE.CircleGeometry(2.5 + rnd() * 3, 12), lavaMat);
+        pool.rotation.x = -Math.PI / 2;
+        pool.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        pool.position.y = p.pos.y + 0.1;
+        group.add(pool);
+      } else {
+        const h = 4 + rnd() * 9;
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.8 + rnd(), 1.4 + rnd(), h, 6), rockMat);
+        col.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        col.position.y = p.pos.y + h / 2 - 1;
+        group.add(col);
+      }
+    }
+  },
+  underwater(group, track, rnd) {
+    const coralCols = [0xff8aa0, 0x40f0e0, 0xffd24a, 0x8aff6a].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7, flatShading: true }));
+    for (let i = 0; i < 54; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 8 + rnd() * 26;
+      const coral = new THREE.Group();
+      const n = 2 + Math.floor(rnd() * 3);
+      for (let k = 0; k < n; k++) {
+        const h = 1.2 + rnd() * 3;
+        const c = new THREE.Mesh(new THREE.ConeGeometry(0.35 + rnd() * 0.4, h, 5), coralCols[Math.floor(rnd() * 4)]);
+        c.position.set((rnd() - 0.5) * 1.6, h / 2, (rnd() - 0.5) * 1.6);
+        c.rotation.set((rnd() - 0.5) * 0.4, 0, (rnd() - 0.5) * 0.4);
+        coral.add(c);
+      }
+      coral.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      group.add(coral);
+    }
+  },
+  factory(group, track, rnd) {
+    const pipeMat = new THREE.MeshStandardMaterial({ color: 0x5a5248, roughness: 0.5, metalness: 0.6 });
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x7a6a48, roughness: 0.9 });
+    for (let i = 0; i < 40; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 7 + rnd() * 22;
+      if (i % 3 === 0) {
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 8 + rnd() * 10, 8), pipeMat);
+        pipe.rotation.z = Math.PI / 2;
+        pipe.rotation.y = yawFor(p.dir);
+        pipe.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        pipe.position.y += 2.5 + rnd() * 3;
+        group.add(pipe);
+      } else {
+        const sz = 1 + rnd() * 1.8;
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(sz, sz, sz), crateMat);
+        crate.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        crate.position.y += sz / 2;
+        crate.rotation.y = rnd() * Math.PI;
+        group.add(crate);
+      }
+    }
+  },
+  islands(group, track, rnd) {
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x8a6f52, roughness: 1, flatShading: true });
+    const grassMat = new THREE.MeshStandardMaterial({ color: 0x5aa85a, roughness: 1, flatShading: true });
+    for (let i = 0; i < 34; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 12 + rnd() * 36;
+      const isl = new THREE.Group();
+      const r = 3 + rnd() * 6;
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.75, 1.4, 7), grassMat);
+      const bottom = new THREE.Mesh(new THREE.ConeGeometry(r * 0.75, r * 1.6, 7), rockMat);
+      bottom.rotation.x = Math.PI;
+      bottom.position.y = -r * 0.8 - 0.6;
+      isl.add(top, bottom);
+      isl.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      isl.position.y = p.pos.y - 6 - rnd() * 14;
+      group.add(isl);
+    }
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xfff6e6, fog: false, transparent: true, opacity: 0.85 });
+    for (let i = 0; i < 8; i++) {
+      const cl = new THREE.Mesh(new THREE.SphereGeometry(1, 7, 5), cloudMat);
+      const a = (i / 8) * Math.PI * 2;
+      cl.position.set(Math.cos(a) * (300 + i * 30), 90 + (i % 3) * 30, Math.sin(a) * (300 + i * 30));
+      cl.scale.set(30 + i * 5, 8, 14 + i * 2);
+      group.add(cl);
+    }
+  },
+  ruins(group, track, rnd) {
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0xb09878, roughness: 0.95, flatShading: true });
+    for (let i = 0; i < 44; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 6 + rnd() * 20;
+      if (i % 3 === 0) {
+        const h = 4 + rnd() * 4;
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.8, h, 8), stoneMat);
+        col.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        col.position.y += h / 2 - 0.5;
+        col.rotation.z = (rnd() - 0.5) * 0.12;
+        group.add(col);
+      } else {
+        const blk = new THREE.Mesh(new THREE.BoxGeometry(1.5 + rnd() * 2, 1 + rnd() * 1.6, 1.5 + rnd() * 2), stoneMat);
+        blk.position.copy(p.pos).addScaledVector(p.right, side * dist);
+        blk.position.y += 0.4;
+        blk.rotation.y = rnd() * Math.PI;
+        group.add(blk);
+      }
+    }
+  },
+  storm(group, track, rnd) {
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x2c3238, roughness: 1, flatShading: true });
+    for (let i = 0; i < 36; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 10 + rnd() * 34;
+      const h = 3 + rnd() * 8;
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(1 + rnd() * 2, h, 5), rockMat);
+      spire.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      spire.position.y += h / 2 - 1;
+      spire.rotation.z = (rnd() - 0.5) * 0.2;
+      group.add(spire);
+    }
+  },
+  crystal(group, track, rnd) {
+    const crysCols = [0xc8b0ff, 0x8ad0ff, 0xff9af5, 0xbaffec].map((c) =>
+      new THREE.MeshStandardMaterial({ color: c, roughness: 0.2, metalness: 0.1, emissive: c, emissiveIntensity: 0.35, flatShading: true }));
+    for (let i = 0; i < 50; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 5 + rnd() * 20;
+      const cluster = new THREE.Group();
+      const n = 2 + Math.floor(rnd() * 3);
+      for (let k = 0; k < n; k++) {
+        const h = 1.5 + rnd() * 4;
+        const c = new THREE.Mesh(new THREE.OctahedronGeometry(0.5 + rnd() * 0.6, 0), crysCols[Math.floor(rnd() * 4)]);
+        c.scale.y = 2 + rnd() * 2;
+        c.position.set((rnd() - 0.5) * 1.8, h / 2, (rnd() - 0.5) * 1.8);
+        c.rotation.set((rnd() - 0.5) * 0.5, rnd() * Math.PI, (rnd() - 0.5) * 0.5);
+        cluster.add(c);
+      }
+      cluster.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      group.add(cluster);
+    }
+  },
+  space(group, track, rnd) {
+    // starfield
+    const starGeo = new THREE.BufferGeometry();
+    const n = 900;
+    const posArr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2, b = Math.acos(2 * rnd() - 1);
+      const r = 700 + rnd() * 120;
+      posArr[i * 3] = r * Math.sin(b) * Math.cos(a);
+      posArr[i * 3 + 1] = Math.abs(r * Math.cos(b)) * 0.7 + 20;
+      posArr[i * 3 + 2] = r * Math.sin(b) * Math.sin(a);
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xdde4ff, size: 1.6, sizeAttenuation: false, fog: false }));
+    group.add(stars);
+    // nearby planet
+    const planet = new THREE.Mesh(new THREE.SphereGeometry(90, 24, 18),
+      new THREE.MeshStandardMaterial({ color: 0x4a6a9a, roughness: 0.8 }));
+    planet.position.set(420, 180, -460);
+    group.add(planet);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(130, 6, 6, 40),
+      new THREE.MeshStandardMaterial({ color: 0x8a9ac8, roughness: 0.6 }));
+    ring.position.copy(planet.position);
+    ring.rotation.x = Math.PI / 2.4;
+    group.add(ring);
+    // station ribs over the road
+    const ribMat = new THREE.MeshStandardMaterial({ color: 0x3a4254, roughness: 0.5, metalness: 0.6 });
+    for (let s = 0; s < track.L; s += track.L / 8) {
+      const p = track.pointAt(s);
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(p.width / 2 + 3, 0.5, 6, 14, Math.PI), ribMat);
+      rib.position.copy(p.pos); rib.position.y += 0.5;
+      rib.rotation.y = yawFor(p.dir);
+      group.add(rib);
+    }
+    // antenna + dock towers along the hull
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0x2c3444, roughness: 0.5, metalness: 0.55 });
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0xff5d5d });
+    for (let i = 0; i < 14; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 10 + rnd() * 26;
+      const h = 6 + rnd() * 12;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(1.6, h, 1.6), towerMat);
+      tower.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      tower.position.y += h / 2 - 1;
+      group.add(tower);
+      const blink = new THREE.Mesh(new THREE.SphereGeometry(0.35, 6, 5), lightMat);
+      blink.position.copy(tower.position); blink.position.y += h / 2 + 0.4;
+      group.add(blink);
+    }
+  },
+};
+
+// ----------------------------------------------------------------------------
+// Main entry
+// ----------------------------------------------------------------------------
+export function buildThemedEnvironment(scene, track, bannerName) {
+  const theme = track.def.theme;
+  const kit = KITS[theme] || KITS.ruins;
+  const group = new THREE.Group();
+  const colliders = [];
+  const state = { padMaterials: [], obstacleMeshes: [], extras: {} };
+  scene.add(group);
+
+  const sunLight = buildSky(scene, group, kit);
+
+  // ground (islands theme floats over void instead)
+  if (kit.ground !== null) {
+    const minY = Math.min(...track.samples.map((s) => s.pos.y));
+    const ground = new THREE.Mesh(
+      new THREE.CircleGeometry(820, 56),
+      new THREE.MeshStandardMaterial({ color: kit.ground, roughness: 1 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = minY - 0.6;
+    group.add(ground);
+  }
+
+  buildRoad(group, track, kit);
+  buildFinishAndBanner(group, track, bannerName || 'SUNFORGE');
+  buildRampsAndPads(group, track, state);
+  buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : 0x565e6c);
+  buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
+  buildObstacles(group, track, state);
+
+  const rnd = seeded(track.def.musicSeed * 1013 + 7);
+  (PROPS[theme] || PROPS.ruins)(group, track, rnd);
+
+  state.update = (dt, time) => {
+    for (const { mesh, obstacle, isFlame } of state.obstacleMeshes) {
+      if (obstacle.type === 'gear') mesh.rotation.y = obstacle.angle;
+      else if (obstacle.type === 'slider' || obstacle.type === 'pendulum') mesh.position.copy(obstacle.pos);
+      else if (isFlame) {
+        mesh.visible = obstacle.active;
+        if (obstacle.active) mesh.scale.set(1, 0.9 + Math.sin(time * 30) * 0.15, 1);
+      }
+    }
+    const pulse = 0.75 + Math.sin(time * 6) * 0.25;
+    for (const m of state.padMaterials) m.opacity = pulse;
+    if (theme === 'storm') {
+      // lightning flicker
+      const flash = Math.max(0, Math.sin(time * 1.7) * Math.sin(time * 7.3) - 0.93) * 12;
+      sunLight.intensity = kit.sun[1] + flash;
+    }
+  };
+
+  return { group, colliders, state };
+}
