@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunforge Racers</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏜️</text></svg>" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <!-- ===================== HUD ===================== -->
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div class="chip chip-pos" id="hud-pos">4th</div>
+        <div class="chip" id="hud-lap">Lap 1/3</div>
+        <div class="chip chip-time" id="hud-time">00:00.000</div>
+      </div>
+
+      <div class="hud-center">
+        <div id="countdown"></div>
+        <div id="notify"></div>
+        <div id="wrongway" class="hidden"></div>
+      </div>
+
+      <div class="hud-bottom">
+        <div id="boost-box">
+          <div id="boost-label">DRIFT CHARGE</div>
+          <div id="boost-meter">
+            <div class="seg seg1"><div class="fill"></div></div>
+            <div class="seg seg2"><div class="fill"></div></div>
+            <div class="seg seg3"><div class="fill"></div></div>
+          </div>
+        </div>
+        <div id="speed-box">
+          <span id="speed-val">0</span>
+          <span id="speed-unit">km/h</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== MAIN MENU ===================== -->
+    <div id="screen-main" class="screen">
+      <div class="menu-card">
+        <div class="title-block">
+          <div class="title-sun"></div>
+          <h1 data-i18n="game.title">Sunforge Racers</h1>
+          <div class="subtitle" data-i18n="game.subtitle">Desert Canyon Grand Prix</div>
+        </div>
+        <div class="menu-buttons">
+          <button class="btn btn-primary" id="btn-start" data-i18n="menu.start">Start Race</button>
+          <button class="btn" id="btn-settings" data-i18n="menu.settings">Settings</button>
+        </div>
+        <div class="menu-meta">
+          <div data-i18n="game.pilot">Pilot: Ember the Dustfox</div>
+          <div data-i18n="game.kart">Kart: Dune Blazer MK-1</div>
+        </div>
+        <div class="controls-hint" data-i18n="controls.help">Controls</div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS ===================== -->
+    <div id="screen-settings" class="screen hidden">
+      <div class="menu-card">
+        <h2 data-i18n="settings.title">Settings</h2>
+        <div class="setting-row">
+          <label data-i18n="settings.language">Language</label>
+          <div class="lang-toggle">
+            <button class="btn btn-small" id="lang-en">English</button>
+            <button class="btn btn-small" id="lang-it">Italiano</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label data-i18n="settings.camDist">Camera distance</label>
+          <input type="range" id="cam-dist" min="6" max="12" step="0.1" />
+        </div>
+        <div class="setting-row">
+          <label data-i18n="settings.camHeight">Camera height</label>
+          <input type="range" id="cam-height" min="2.2" max="6" step="0.1" />
+        </div>
+        <div class="setting-row">
+          <label data-i18n="settings.volume">Volume</label>
+          <input type="range" id="volume" min="0" max="1" step="0.05" />
+        </div>
+        <button class="btn" id="btn-settings-back" data-i18n="settings.back">Back</button>
+      </div>
+    </div>
+
+    <!-- ===================== PAUSE ===================== -->
+    <div id="screen-pause" class="screen hidden">
+      <div class="menu-card">
+        <h2 data-i18n="pause.title">Paused</h2>
+        <div class="menu-buttons">
+          <button class="btn btn-primary" id="btn-resume" data-i18n="menu.resume">Resume</button>
+          <button class="btn" id="btn-pause-restart" data-i18n="menu.restart">Restart</button>
+          <button class="btn" id="btn-pause-menu" data-i18n="menu.main">Main Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== RESULTS ===================== -->
+    <div id="screen-results" class="screen hidden">
+      <div class="menu-card results-card">
+        <h2 data-i18n="results.title">Race Results</h2>
+        <div id="results-headline"></div>
+        <div id="results-rows"></div>
+        <div id="results-stats"></div>
+        <div class="menu-buttons">
+          <button class="btn btn-primary" id="btn-results-restart" data-i18n="menu.restart">Restart</button>
+          <button class="btn" id="btn-results-menu" data-i18n="menu.main">Main Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="webgl-error" class="screen hidden">
+      <div class="menu-card"><h2 data-i18n="error.webgl">WebGL not available</h2></div>
+    </div>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

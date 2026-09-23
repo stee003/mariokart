@@ -1,0 +1,11 @@
+{
+  "name": "sunforge-racers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sunforge Racers - original arcade kart racing vertical slice",
+  "scripts": {
+    "start": "python3 -m http.server 8000 --bind 0.0.0.0",
+    "test": "node test/logic.test.mjs"
+  }
+}
