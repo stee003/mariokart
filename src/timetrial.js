@@ -6,7 +6,7 @@
 // leaderboard service.
 // ============================================================================
 
-import { GhostRecorder } from './ghost.js';
+import { GhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
 
 export class TimeTrialSession {
   constructor(trackId) {
@@ -51,14 +51,40 @@ export class TimeTrialSession {
 }
 
 // Personal-records store backed by SaveManager.
-// Shape: records[trackId] = { bestTotal, bestLap, lapTimes, ghost, date }
+// Shape: records[trackId] = { bestTotal, bestLap, lapTimes, ghost, ghostStep, date }
+//   ghost      - flat serialized array (x,y,z,yaw quads), ready for
+//                deserializeGhost; stored at 30 Hz to keep quota usage small.
+//   ghostStep  - sim frames between stored samples (2 = 30 Hz, 3 = 20 Hz).
 export class RecordsStore {
   constructor(save) {
     this.save = save;
     this.records = save.get('records', {});
+    if (this.records === null || typeof this.records !== 'object' || Array.isArray(this.records)) {
+      this.records = {};      // corrupt save entry: start clean, never crash
+    }
   }
 
   get(trackId) { return this.records[trackId] || null; }
+
+  // Ghost frames ready for GhostPlayer (frames + sim-step spacing).
+  ghostFor(trackId) {
+    const rec = this.get(trackId);
+    if (!rec?.ghost?.length) return null;
+    return { frames: deserializeGhost(rec.ghost), step: rec.ghostStep || 1 };
+  }
+
+  // Compactly encode recorded frames for storage: keep every `step`-th frame
+  // (and always the last one) serialized to a flat numeric array.
+  static encodeGhost(frames) {
+    if (!frames?.length) return { ghost: null, ghostStep: 1 };
+    const step = frames.length > 24000 ? 3 : 2;   // 30 Hz; 20 Hz for epic runs
+    const kept = [];
+    for (let i = 0; i < frames.length; i += step) kept.push(frames[i]);
+    if (kept[kept.length - 1] !== frames[frames.length - 1]) {
+      kept.push(frames[frames.length - 1]);
+    }
+    return { ghost: serializeGhost(kept), ghostStep: step };
+  }
 
   // Returns the list of updated record kinds ('total' | 'lap') - the caller
   // shows the "NEW RECORD" celebration.
@@ -70,11 +96,14 @@ export class RecordsStore {
       bestLap: prev?.bestLap ?? null,
       lapTimes: result.lapTimes || [],
       ghost: prev?.ghost ?? null,
+      ghostStep: prev?.ghostStep ?? 1,
       date: Date.now(),
     };
     if (result.totalTime !== null && (next.bestTotal === null || result.totalTime < next.bestTotal)) {
       next.bestTotal = result.totalTime;
-      next.ghost = result.ghostFrames;   // ghost belongs to the best total run
+      const enc = RecordsStore.encodeGhost(result.ghostFrames);
+      next.ghost = enc.ghost;                // ghost belongs to the best total run
+      next.ghostStep = enc.ghostStep;
       updated.push('total');
     }
     if (result.bestLap !== null && (next.bestLap === null || result.bestLap < next.bestLap)) {

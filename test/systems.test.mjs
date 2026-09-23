@@ -98,7 +98,7 @@ check('isUnlocked honors levels', (() => {
 
 // ------------------------------------------------------------- achievements
 console.log('--- achievements ---');
-check('16 achievements defined', ACHIEVEMENTS.length === 16);
+check('18 achievements defined', ACHIEVEMENTS.length === 18);
 const asave = memSave();
 check('nothing earned at start', checkAchievements(asave).length === 0);
 recordStats(asave, { races: 1 });

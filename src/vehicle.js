@@ -206,23 +206,32 @@ export class VehicleController {
     this.latSpeed = latSpeed;
 
     // --- vertical ------------------------------------------------------------
-    const surf = track.surface(this.pos, this.hint);
+    // surface() uses pos.y to lock the deck on multi-level sections and
+    // vel to keep cross-leg snaps aligned with the kart's heading.
+    this.pos.y = this.y;
+    const surf = track.surface(this.pos, this.hint, this.vel);
     this.surf = surf;
     const groundY = surf.y;
 
     if (this.grounded) {
       const prevY = this.y;
-      this.y = groundY;
+      // Snap the kart to the ground, but bound the per-step lift: a real ramp
+      // can only raise the kart at ~10-14 m/s, so anything beyond that is a
+      // surface discontinuity (deck snap / lane flip) and must not inject
+      // climb velocity into the launch bookkeeping.
+      const maxLift = 0.22; // m per 60Hz step (falls are snapped unbounded below)
+      this.y = prevY + Math.min(groundY - prevY, maxLift);
       const implicit = (this.y - prevY) / dt;
       this.vy = implicit;
       // remember how fast the ground was climbing (ramp launches)
-      if (implicit > 0.3) this.climbRate = this.climbRate * 0.5 + implicit * 0.5;
+      if (implicit > 0.3) this.climbRate = Math.min(this.climbRate * 0.5 + implicit * 0.5, 14);
       else this.climbRate = Math.max(0, this.climbRate - 18 * dt);
       if (groundY < prevY - 0.4) {
         // terrain fell away - become airborne
         this.grounded = false;
         if (this.climbRate > 0.6) {
-          this.vy = this.climbRate * (this.onRamp ? CONFIG.boost.rampLaunchMult : 1.0);
+          // full launch off actual ramps; soft lip-pop elsewhere
+          this.vy = Math.min(this.climbRate * (this.onRamp ? CONFIG.boost.rampLaunchMult : 1.0), this.onRamp ? 99 : 8.5);
           this.fx.launch = this.vy;
         } else {
           this.vy = 0;
@@ -280,7 +289,9 @@ export class VehicleController {
     }
 
     // --- recovery / stuck detection ---------------------------------------------
-    if (onRoad || this.resetTimer > 0) {
+    // Shoulders count as "still racing" (curb/grass drag penalises enough);
+    // matches the AI's own off-course definition.
+    if (onRoad || surf.onShoulder || this.resetTimer > 0) {
       this.offTrackTimer = 0;
     } else {
       this.offTrackTimer += dt;

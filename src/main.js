@@ -5,15 +5,15 @@
 // results). Fixed-timestep physics.
 //
 // Modes: quick race, grand prix (cup progression + scoring), time trial
-// (records + ghost playback). Battle / garage / online flow in later
-// increments reuse the same _loadTrack/startRace plumbing.
+// (records + ghost playback), battle arenas. Garage customization, settings
+// (language / a11y / remap) and records all flow through the same plumbing.
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
 import { SaveManager } from './save.js';
 import { LocalizationManager } from './i18n.js';
-import { InputManager } from './input.js';
+import { InputManager, keyLabel, REMAPPABLE_ACTIONS } from './input.js';
 import { AudioManager } from './audio.js';
 import { MusicManager } from './music.js';
 import { TrackManager } from './track.js';
@@ -30,27 +30,37 @@ import { CameraController } from './camera.js';
 import { RaceManager, formatTime } from './race.js';
 import { HUDManager } from './hud.js';
 import { ParticlePool } from './particles.js';
-import { DRIFT_COLORS } from './drift.js';
+import { driftColors } from './drift.js';
 import { ItemSystem } from './items.js';
 import { ItemVisuals } from './itemMesh.js';
 import { ITEMS } from './content/items.js';
 import { CUPS, getCup, trophyAtLeast } from './content/cups.js';
 import { GrandPrixSession } from './grandprix.js';
-import { TimeTrialSession, RecordsStore } from './timetriial.js';
-import { GhostPlayer, deserializeGhost } from './ghost.js';
+import { TimeTrialSession, RecordsStore } from './timetrial.js';
+import { GhostPlayer } from './ghost.js';
 import { DIFFICULTY_TIERS, getDifficulty } from './aiDifficulty.js';
-import { applyEvent, getProgress } from './progression.js';
+import { applyEvent, getProgress, isUnlocked } from './progression.js';
 import { recordStats, checkAchievements, trackPlayed } from './achievements.js';
 import { LocalLeaderboard } from './leaderboard.js';
 import { LocalProvider } from './online.js';
+import { buildLoadout } from './content/loadout.js';
+import { CHARACTERS } from './content/characters.js';
+import { CHASSIS } from './content/chassis.js';
+import { WHEELS } from './content/wheels.js';
+import { PAINTS } from './content/cosmetics.js';
 
 const FIXED_DT = 1 / 60;
+
+// Developer tools (FPS overlay + verbose logging) stay OFF unless ?debug=1
+// is present in the URL - release builds never show them.
+const DEBUG = typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).has('debug');
 
 class Game {
   constructor() {
     this.save = new SaveManager();
     this.i18n = new LocalizationManager(this.save);
-    this.input = new InputManager();
+    this.input = new InputManager(this.save);
     this.audio = new AudioManager(this.save);
     this.music = new MusicManager(this.save);
     this.records = new RecordsStore(this.save);
@@ -85,16 +95,65 @@ class Game {
     this.sparks = new ParticlePool(this.scene, CONFIG.particles.sparkCount, true);
     this.hud = new HUDManager(this.i18n);
 
+    // accessibility settings reapplied over everything below
+    this._applyA11y();
+    this.i18n.onChange(() => { document.documentElement.lang = this.i18n.lang; });
+    document.documentElement.lang = this.i18n.lang;
+
     this.trackId = this.save.get('lastTrack', 'sunforge_circuit');
     this._loadTrack(this.trackId, true);
 
     this.bindUI();
     window.addEventListener('resize', () => this.onResize());
 
+    // Browser autoplay policy: unlock audio on the first real interaction,
+    // whichever device it comes from (button clicks already do this too).
+    const unlockAudio = () => {
+      this.audio.init(); this.audio.resume();
+      this.music.init(); this.music.resume();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
+
+    // adaptive resolution: keep 60 fps on weaker GPUs by stepping the render
+    // pixel ratio down (and back up when the headroom returns)
+    this._prLevels = [1, 1.25, 1.5, Math.min(window.devicePixelRatio || 1, 2)]
+      .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
+      .sort((a, b) => a - b);
+    this._prIndex = this._prLevels.length - 1;
+    this._prAcc = 0; this._prN = 0;
+
+    // developer FPS overlay (?debug=1 only)
+    this._fpsEl = null;
+    if (DEBUG) {
+      this._fpsEl = document.createElement('div');
+      this._fpsEl.id = 'fps-overlay';
+      document.body.appendChild(this._fpsEl);
+    }
+    this._fpsAcc = 0; this._fpsN = 0;
+
     this.clock = new THREE.Clock();
     this.accumulator = 0;
     this.time = 0;
     this.renderer.setAnimationLoop(() => this.frame());
+  }
+
+  // ------------------------------------------------------- accessibility setup
+  _applyA11y() {
+    const uiScale = this.save.get('uiScale', 100);
+    document.body.dataset.uiscale = String(uiScale);
+    const reduceFx = this.save.get('reducedFx', false);
+    const colorblind = this.save.get('colorblind', false);
+    document.body.classList.toggle('cb', colorblind);
+    document.body.classList.toggle('reduce-fx', reduceFx);
+    this.fxDensity = reduceFx ? 0.35 : 1;
+    this.dust.setDensity(this.fxDensity);
+    this.sparks.setDensity(this.fxDensity);
+    if (this.camCtl) {
+      this.camCtl.shakeScale = reduceFx ? 0.12 : 1;
+      this.camCtl.fovScale = reduceFx ? 0.3 : 1;
+    }
+    this.driftPalette = driftColors(colorblind);
   }
 
   // --------------------------------------------------------------- world load
@@ -107,12 +166,18 @@ class Game {
     this.trackId = def.id;
     if (TRACK_DEFS.some((d) => d.id === def.id)) this.save.set('lastTrack', def.id);
 
-    // dispose previous world (environment group + kart meshes)
-    if (this.env) this.scene.remove(this.env.group);
+    // dispose previous world (environment group + kart meshes) so a long
+    // session of track-hopping does not leak GPU buffers
+    if (this.env) {
+      this.scene.remove(this.env.group);
+      disposeTree(this.env.group);
+    }
     if (this.kartVisuals) {
       for (const vis of this.kartVisuals.values()) {
         this.scene.remove(vis.group);
         this.scene.remove(vis.shadow);
+        disposeTree(vis.group);
+        disposeTree(vis.shadow);
       }
     }
     if (this.itemVisuals) this.itemVisuals.dispose();
@@ -137,6 +202,8 @@ class Game {
       this.camCtl.track = this.track;
     }
     this.camCtl.setColliders(this.env.colliders);
+    this.camCtl.shakeScale = this.save.get('reducedFx', false) ? 0.12 : 1;
+    this.camCtl.fovScale = this.save.get('reducedFx', false) ? 0.3 : 1;
 
     // items (power-ups) --------------------------------------------------------
     this.items = new ItemSystem({
@@ -151,13 +218,24 @@ class Game {
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;   // shown on race start
 
     // karts ---------------------------------------------------------------------
+    // The player drives the loadout configured in the garage (colors, stats
+    // and drift tuning); AI rivals use their fixed personalities.
+    this.loadout = buildLoadout(this.save.get('loadout', {}));
     this.kartVisuals = new Map();
     const roster = [
       { nameKey: 'ai.cinder',  color: 0xd9452f, accent: 0xffd23f, pilot: 0x53302a, ai: 'aggressive' },
       { nameKey: 'ai.zephyr',  color: 0x2fa877, accent: 0xd8f4e6, pilot: 0x3c5c4e, ai: 'balanced' },
       { nameKey: 'ai.bastion', color: 0x4159c9, accent: 0x9fb4ff, pilot: 0x37406e, ai: 'defensive' },
     ].slice(0, solo ? 0 : Math.max(0, Math.min(3, rivals)));
-    roster.push({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
+    roster.push({
+      nameKey: 'ai.you',
+      color: this.loadout.visual.bodyColor,
+      accent: this.loadout.visual.accentColor,
+      pilot: this.loadout.visual.pilotColor,
+      ai: null,
+      params: this.loadout.params,
+      driftMods: this.loadout.driftMods,
+    });
 
     this.race = new RaceManager({
       track: this.track, hud: this.hud, audio: this.audio, i18n: this.i18n,
@@ -165,7 +243,7 @@ class Game {
       onEvent: (type, payload) => this.onRaceEvent(type, payload),
     });
     for (const d of roster) {
-      const vehicle = new VehicleController(this.track, d.ai === null);
+      const vehicle = new VehicleController(this.track, d.ai === null, d.params ?? null, d.driftMods ?? null);
       const vis = buildKart(d.color, d.accent, d.pilot);
       this.scene.add(vis.group);
       this.scene.add(vis.shadow);
@@ -201,6 +279,8 @@ class Game {
     if (this.ghostVis) {
       this.scene.remove(this.ghostVis.group);
       this.scene.remove(this.ghostVis.shadow);
+      disposeTree(this.ghostVis.group);
+      disposeTree(this.ghostVis.shadow);
       this.ghostVis = null;
     }
   }
@@ -316,6 +396,91 @@ class Game {
       [0, 1, 2, 3].map((n) => ({ value: n, label: String(n) })),
       () => this.save.get('quickRivals', 3),
       (v) => this.save.set('quickRivals', v));
+
+    // garage
+    click('btn-garage', () => this.openGarage());
+    click('btn-garage-back', () => { this.hud.showScreen('screen-main'); });
+
+    // accessibility toggles -------------------------------------------------
+    const syncToggle = (key, onId, offId, onChange) => {
+      const sync = () => {
+        const on = this.save.get(key, false);
+        $(onId).classList.toggle('selected', on);
+        $(offId).classList.toggle('selected', !on);
+      };
+      $(onId).addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set(key, true); sync(); onChange(); });
+      $(offId).addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set(key, false); sync(); onChange(); });
+      sync();
+    };
+    syncToggle('reducedFx', 'reducefx-on', 'reducefx-off', () => this._applyA11y());
+    syncToggle('colorblind', 'colorblind-on', 'colorblind-off', () => this._applyA11y());
+
+    this._buildOptionGroup('uiscale-list',
+      [{ value: 100, labelKey: 'settings.size.normal' },
+       { value: 115, labelKey: 'settings.size.large' },
+       { value: 130, labelKey: 'settings.size.xlarge' }],
+      () => this.save.get('uiScale', 100),
+      (v) => { this.save.set('uiScale', v); this._applyA11y(); });
+
+    // key remapping
+    this._renderKeysList();
+    $('btn-keys-reset').addEventListener('click', () => {
+      this.audio.init(); this.audio.click();
+      this.input.resetBindings();
+      $('keys-status').textContent = '';
+      this._renderKeysList();
+    });
+
+    this._refreshMenuMeta();
+  }
+
+  // The pilot/kart summary shown on the main menu reflects the garage loadout.
+  _refreshMenuMeta() {
+    const lo = buildLoadout(this.save.get('loadout', {}));
+    const pilot = document.getElementById('menu-pilot');
+    const kart = document.getElementById('menu-kart');
+    if (pilot) pilot.textContent = this.i18n.t('menu.pilotOf', {
+      name: `${this.i18n.t(lo.character.nameKey)} ${this.i18n.t(lo.character.speciesKey)}`,
+    });
+    if (kart) kart.textContent = this.i18n.t('menu.kartOf', { name: this.i18n.t(lo.chassis.nameKey) });
+  }
+
+  // ---------------------------------------------------------------- keys map
+  _renderKeysList() {
+    const list = document.getElementById('keys-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const bindings = this.input.bindings();
+    for (const action of REMAPPABLE_ACTIONS) {
+      const row = document.createElement('div');
+      row.className = 'keys-row';
+      const label = document.createElement('span');
+      label.textContent = this.i18n.t('keys.action.' + action);
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-small';
+      btn.textContent = keyLabel(bindings[action]);
+      btn.addEventListener('click', () => {
+        this.audio.init(); this.audio.click();
+        btn.classList.add('selected');
+        document.getElementById('keys-status').textContent = this.i18n.t('keys.press');
+        this.input.captureNextKey((code) => {
+          document.getElementById('keys-status').textContent = '';
+          if (code) {
+            // a code may only drive one action: steal it from the old owner
+            for (const other of REMAPPABLE_ACTIONS) {
+              if (other !== action && this.input.bindings()[other] === code &&
+                  this.input._custom[other]) {
+                this.input.setBinding(other, null);
+              }
+            }
+            this.input.setBinding(action, code);
+          }
+          this._renderKeysList();
+        });
+      });
+      row.append(label, btn);
+      list.appendChild(row);
+    }
   }
 
   _buildOptionGroup(containerId, options, getCurrent, onSet) {
@@ -371,10 +536,129 @@ class Game {
   }
 
   _refreshLists() {
-    const vis = document.getElementById('screen-trackselect');
-    if (vis && !vis.classList.contains('hidden')) this._renderTrackList();
-    const cup = document.getElementById('screen-cupselect');
-    if (cup && !cup.classList.contains('hidden')) this._renderCupList();
+    const visible = (id) => {
+      const el = document.getElementById(id);
+      return el && !el.classList.contains('hidden');
+    };
+    if (visible('screen-trackselect')) this._renderTrackList();
+    if (visible('screen-cupselect')) this._renderCupList();
+    if (visible('screen-battleselect')) this._renderBattleLists();
+    if (visible('screen-garage')) this._renderGarage();
+    this._renderKeysList();
+    this._refreshMenuMeta();
+  }
+
+  // --------------------------------------------------------------- garage UI
+  openGarage() {
+    this._renderGarage();
+    this.hud.showScreen('screen-garage');
+  }
+
+  _unlockHint(entry, level) {
+    const u = entry.unlock;
+    if (!u) return this.i18n.t('garage.locked');
+    if (u.type === 'level') return this.i18n.t('garage.lockedLevel', { level: u.level });
+    if (u.noteKey) return this.i18n.t(u.noteKey);
+    return this.i18n.t('garage.locked');
+  }
+
+  _renderGarage() {
+    const level = getProgress(this.save).level;
+    const spec = { ...(this.save.get('loadout', {}) || {}) };
+    const lo = buildLoadout(spec);
+
+    const renderGrid = (containerId, entries, currentId, key, opts = {}) => {
+      const box = document.getElementById(containerId);
+      if (!box) return;
+      box.innerHTML = '';
+      for (const entry of entries) {
+        const unlocked = isUnlocked(entry, level, this.save);
+        const btn = document.createElement('button');
+        btn.className = 'btn list-row garage-cell' + (entry.id === currentId ? ' selected' : '') + (unlocked ? '' : ' locked');
+        btn.disabled = !unlocked;
+        if (opts.swatch) {
+          const sw = document.createElement('span');
+          sw.className = 'swatch';
+          sw.style.background = `#${entry.color.toString(16).padStart(6, '0')}`;
+          btn.appendChild(sw);
+        }
+        const name = document.createElement('span');
+        name.className = 'garage-name';
+        name.textContent = this.i18n.t(entry.nameKey);
+        name.title = entry.personalityKey ? this.i18n.t(entry.personalityKey)
+          : entry.descKey ? this.i18n.t(entry.descKey) : '';
+        btn.appendChild(name);
+        const meta = document.createElement('span');
+        meta.className = 'list-meta';
+        if (opts.swatch) meta.textContent = unlocked ? '' : this._unlockHint(entry, level);
+        else meta.textContent = unlocked
+          ? (entry.descKey ? this.i18n.t(entry.descKey) : (entry.personalityKey ? this.i18n.t(entry.personalityKey) : ''))
+          : this._unlockHint(entry, level);
+        btn.appendChild(meta);
+        if (unlocked) {
+          btn.addEventListener('click', () => {
+            this.audio.click();
+            spec[key] = entry.id;
+            this.save.set('loadout', spec);
+            this.loadout = buildLoadout(spec);
+            this._refreshPlayerKart();
+            this._renderGarage();
+            this._refreshMenuMeta();
+          });
+        }
+        box.appendChild(btn);
+      }
+    };
+
+    renderGrid('garage-characters', CHARACTERS, lo.character.id, 'characterId');
+    renderGrid('garage-chassis', CHASSIS, lo.chassis.id, 'chassisId');
+    renderGrid('garage-wheels', WHEELS, lo.wheels.id, 'wheelId');
+    renderGrid('garage-paints', PAINTS, lo.paint.id, 'paintId', { swatch: true });
+
+    // effective-stat bars
+    const statsBox = document.getElementById('garage-stats');
+    statsBox.innerHTML = '';
+    for (const key of ['acceleration', 'topSpeed', 'handling', 'weight', 'driftControl', 'offRoad']) {
+      const row = document.createElement('div');
+      row.className = 'stat-row';
+      const label = document.createElement('span');
+      label.className = 'stat-label';
+      label.textContent = this.i18n.t('stat.' + key);
+      const bar = document.createElement('div');
+      bar.className = 'stat-bar';
+      const fill = document.createElement('div');
+      fill.className = 'stat-fill';
+      const v = Math.max(0, Math.min(10, lo.stats[key]));
+      fill.style.width = `${(v / 10) * 100}%`;
+      const val = document.createElement('span');
+      val.className = 'stat-val';
+      val.textContent = (Math.round(v * 10) / 10).toFixed(1);
+      bar.appendChild(fill);
+      row.append(label, bar, val);
+      statsBox.appendChild(row);
+    }
+  }
+
+  // Swap the player kart's visuals/params in place (menu backdrop + garage
+  // preview) without rebuilding the whole world.
+  _refreshPlayerKart() {
+    const kart = this.playerKart;
+    if (!kart || !this.loadout) return;
+    const old = this.kartVisuals.get(kart.vehicle);
+    if (old) {
+      this.scene.remove(old.group);
+      this.scene.remove(old.shadow);
+      disposeTree(old.group);
+      disposeTree(old.shadow);
+    }
+    const vis = buildKart(this.loadout.visual.bodyColor,
+      this.loadout.visual.accentColor, this.loadout.visual.pilotColor);
+    this.scene.add(vis.group);
+    this.scene.add(vis.shadow);
+    this.kartVisuals.set(kart.vehicle, vis);
+    kart.charVis = vis.charVis || null;
+    kart.vehicle.params = this.loadout.params;
+    kart.vehicle.drift.mods = this.loadout.driftMods;
   }
 
   _trophies() { return this.save.get('trophies', {}); }
@@ -439,9 +723,9 @@ class Game {
     const rivals = mode === 'quick' ? this.save.get('quickRivals', 3) : 3;
     this._loadTrack(trackId, false, { solo: mode === 'timetrial', rivals });
     if (mode === 'timetrial') {
-      const rec = this.records.get(trackId);
-      this.ghostPlayer = rec?.ghost
-        ? new GhostPlayer(deserializeGhost(rec.ghost), FIXED_DT)
+      const ghost = this.records.ghostFor(trackId);
+      this.ghostPlayer = ghost
+        ? new GhostPlayer(ghost.frames, FIXED_DT * ghost.step)
         : null;
     } else {
       this.ghostPlayer = null;
@@ -647,7 +931,7 @@ class Game {
     });
     document.getElementById('results-stats').textContent = '';
     document.getElementById('results-extra').innerHTML = '';
-    document.getElementById('btn-results-restart').textContent = i18n.t('battle.start');
+    document.getElementById('btn-results-restart').textContent = i18n.t('menu.restart');
     this.hud.showScreen('screen-results');
 
     const playerWon = !!winner && winner.isPlayer;
@@ -1061,7 +1345,7 @@ class Game {
 
       // drift smoke at rear wheels, tinted by charge level
       if (v.drift.drifting && v.grounded) {
-        const col = DRIFT_COLORS[v.drift.level];
+        const col = this.driftPalette[v.drift.level];
         for (const side of [1, -1]) {
           _wp.set(side * 0.82, 0, -0.95).applyAxisAngle(_up, v.yaw).add(v.pos);
           _wp.y = v.y + 0.18;
@@ -1110,10 +1394,27 @@ class Game {
     }
   }
 
+  // Adaptive render scale: keeps a stable frame rate on weak hardware and
+  // restores full quality when the GPU has headroom. Evaluated ~every 2s.
+  _adaptPixelRatio(rawDt) {
+    this._prAcc += rawDt; this._prN++;
+    if (this._prAcc < 2 || this._prN < 30) return;
+    const avgMs = (this._prAcc / this._prN) * 1000;
+    this._prAcc = 0; this._prN = 0;
+    const racing = this.appState === 'race' && !this.race.paused;
+    if (!racing) return;
+    if (avgMs > 19 && this._prIndex > 0) this._prIndex--;
+    else if (avgMs < 10.5 && this._prIndex < this._prLevels.length - 1) this._prIndex++;
+    else return;
+    this.renderer.setPixelRatio(this._prLevels[this._prIndex]);
+    this.onResize();
+  }
+
   // ------------------------------------------------------------------ frame
   frame() {
     let rawDt = Math.min(0.1, this.clock.getDelta());
     this.time += rawDt;
+    this.input.poll();
 
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
@@ -1251,6 +1552,17 @@ class Game {
 
     this.renderer.render(this.scene, this.camera);
     this.input.endFrame();
+
+    // perf adaptation + developer overlay (?debug=1)
+    this._adaptPixelRatio(rawDt);
+    if (this._fpsEl) {
+      this._fpsAcc += rawDt; this._fpsN++;
+      if (this._fpsAcc >= 0.25) {
+        this._fpsEl.textContent =
+          `${(this._fpsN / this._fpsAcc).toFixed(0)} fps · ${this._prLevels[this._prIndex]}x · ${this.renderer.info.render.calls} dc`;
+        this._fpsAcc = 0; this._fpsN = 0;
+      }
+    }
   }
 }
 
@@ -1258,6 +1570,32 @@ const _pv = new THREE.Vector3();
 const _pp = new THREE.Vector3();
 const _wp = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
+
+// Recursively release GPU resources (geometries, materials, textures) below
+// a removed subtree. Called on every track/kart swap so long sessions don't
+// accumulate VRAM usage.
+function disposeTree(root) {
+  if (!root) return;
+  const seenGeo = new Set();
+  const seenMat = new Set();
+  root.traverse((o) => {
+    if (o.geometry && !seenGeo.has(o.geometry)) {
+      seenGeo.add(o.geometry);
+      o.geometry.dispose();
+    }
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (seenMat.has(m)) continue;
+        seenMat.add(m);
+        for (const key of ['map', 'emissiveMap', 'normalMap', 'roughnessMap', 'metalnessMap']) {
+          m[key]?.dispose?.();
+        }
+        m.dispose();
+      }
+    }
+  });
+}
 
 try {
   new Game();

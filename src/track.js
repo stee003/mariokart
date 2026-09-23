@@ -286,36 +286,70 @@ export class TrackManager {
 
   _nearest(pos, samples, hintIdx, window) {
     const m = samples.length;
+    // Height band: when the query carries a usable altitude (karts always do),
+    // samples whose ground is way above/below it are only considered if NO
+    // in-band candidate exists. On multi-level sections (helixes, elevated
+    // cities, island hops) this locks the query to the deck the kart is
+    // actually on; single-level behaviour is unchanged.
+    const py = pos.y;
+    const hasY = typeof py === 'number' && Number.isFinite(py);
+    const BAND = 2.2;
     let best = -1, bestD = Infinity, bestAlong = 0, bestLat = 0;
+    let bestB = -1, bestBD = Infinity, bestBAlong = 0, bestBLat = 0;
     const test = (i) => {
       const sm = samples[((i % m) + m) % m];
       const dx = pos.x - sm.pos.x, dz = pos.z - sm.pos.z;
       const along = dx * sm.dir.x + dz * sm.dir.z;
       const lat = dx * sm.right.x + dz * sm.right.z;
       const d = lat * lat + Math.min(0, along) * Math.min(0, along) * 0.25 + Math.max(0, along - this.step) ** 2 * 0.25;
-      if (d < bestD) { bestD = d; best = ((i % m) + m) % m; bestAlong = along; bestLat = lat; }
+      const idx = ((i % m) + m) % m;
+      if (hasY && Math.abs(sm.pos.y - py) <= BAND) {
+        if (d < bestBD) { bestBD = d; bestB = idx; bestBAlong = along; bestBLat = lat; }
+      } else {
+        if (d < bestD) { bestD = d; best = idx; bestAlong = along; bestLat = lat; }
+      }
     };
     if (hintIdx >= 0) {
       for (let k = -window; k <= window; k++) test(hintIdx + k);
     } else {
       for (let i = 0; i < m; i += 2) test(i);
-      const h = best;
+      const h = bestB >= 0 ? bestB : best;
       for (let k = -2; k <= 2; k++) test(h + k);
     }
-    return { idx: best, along: bestAlong, lat: bestLat };
+    return bestB >= 0
+      ? { idx: bestB, along: bestBAlong, lat: bestBLat }
+      : { idx: best, along: bestAlong, lat: bestLat };
   }
 
   // Full surface query: main loop + shortcut + ramps + zones.
+  // Note: pos.y (when present) selects the deck on multi-level sections.
+  // When `vel` is given, cross-leg snaps only adopt segments the mover is
+  // actually heading along (chicanes run legs in opposite directions).
   // Returns progress, lateral, ground y, direction, road state, zone fx.
-  surface(pos, hint = { main: -1, sc: -1 }) {
-    const main = this._nearest(pos, this.samples, hint.main, 24);
+  surface(pos, hint = { main: -1, sc: -1 }, vel = null) {
+    // ±12 samples (18m): wide enough for 40+ m/s travel per step, narrow
+    // enough that hairpin legs / stacked decks don't steal the match.
+    let main = this._nearest(pos, this.samples, hint.main, 12);
+    let sm = this.samples[main.idx];
+    // Leg-cross hysteresis: if the continuous match says the kart is way off
+    // the road, but a full scan finds it comfortably INSIDE another segment's
+    // road (e.g. cutting a hairpin pinch onto the other leg), re-attach —
+    // unless that segment points against the kart's movement.
+    if (hint.main >= 0 && Math.abs(main.lat) > sm.width / 2 + 3) {
+      const g = this._nearest(pos, this.samples, -1, 0);
+      const gm = this.samples[g.idx];
+      if (Math.abs(g.lat) < gm.width / 2 - 1) {
+        const sp = vel ? Math.hypot(vel.x, vel.z) : 0;
+        if (!vel || sp < 2 || (gm.dir.x * vel.x + gm.dir.z * vel.z) > 0.25 * sp) main = g;
+      }
+    }
     hint.main = main.idx;
-    const sm = this.samples[main.idx];
+    sm = this.samples[main.idx];
 
     let useShortcut = false;
     let sc = null;
     if (this.shortcut) {
-      sc = this._nearest(pos, this.shortcut.samples, hint.sc, 24);
+      sc = this._nearest(pos, this.shortcut.samples, hint.sc, 12);
       hint.sc = sc.idx;
       const scW = this.shortcut.halfW + 4;
       const mainW = sm.width / 2 + 4;

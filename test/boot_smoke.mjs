@@ -191,8 +191,8 @@ check('gp trophy awarded or absent', gpFinal.trophy === null ||
   ['bronze', 'silver', 'gold', 'platinum'].includes(gpFinal.trophy));
 
 // --------------------------------------------------------------- time trial
-const { TimeTrialSession, RecordsStore } = await import('../src/timetriial.js');
-const { GhostPlayer, serializeGhost, deserializeGhost } = await import('../src/ghost.js');
+const { TimeTrialSession, RecordsStore } = await import('../src/timetrial.js');
+const { GhostPlayer } = await import('../src/ghost.js');
 
 const ttRace = new RaceManager({ track, hud, audio, i18n, onEvent: () => {} });
 const ttVehicle = new VehicleController(track, true);
@@ -231,9 +231,10 @@ check('tt record submitted', updated.includes('total'));
 const stored = records.get('sunforge_circuit');
 check('tt record persisted with ghost', !!stored && Array.isArray(stored.ghost) && stored.ghost.length > 1000);
 
-// ghost round-trip + playback interpolation
-const ghostData = deserializeGhost(serializeGhost(stored.ghost));
-const player2 = new GhostPlayer(ghostData, dt);
+// ghost round-trip + playback interpolation (storage spacing respected)
+const ghostPack = records.ghostFor('sunforge_circuit');
+check('ghost pack reconstructed at 30 Hz', !!ghostPack && ghostPack.step >= 1 && ghostPack.frames.length > 500);
+const player2 = new GhostPlayer(ghostPack.frames, dt * ghostPack.step);
 const p0 = player2.update(dt);
 const p1 = player2.update(dt);
 check('ghost playback produces poses', !!p0 && !!p1 && Number.isFinite(p0.x) && Number.isFinite(p1.yaw));

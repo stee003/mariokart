@@ -25,11 +25,14 @@ export class CameraController {
     this._target = new THREE.Vector3();
     this.mode = 'menu';
     this.menuAngle = 0;
+    // accessibility multipliers (set from settings; 1 = default feel)
+    this.shakeScale = 1;        // reduce for motion-sensitive players
+    this.fovScale = 1;          // reduce to damp speed/boost FOV swings
   }
 
   setColliders(boxes) { this.colliders = boxes; }
 
-  addTrauma(amount) { this.trauma = Math.min(1, this.trauma + amount); }
+  addTrauma(amount) { this.trauma = Math.min(1, this.trauma + amount * this.shakeScale); }
 
   snapTo(vehicle) {
     this.yaw = vehicle.yaw;
@@ -114,7 +117,8 @@ export class CameraController {
 
     // --- dynamic FOV --------------------------------------------------------
     const speedRatio = Math.min(1, vehicle.speedAbs / CONFIG.vehicle.maxSpeed);
-    const targetFov = C.fovBase + C.fovSpeedAdd * speedRatio + (boostActive ? C.fovBoostAdd : 0);
+    const targetFov = C.fovBase + C.fovSpeedAdd * speedRatio * this.fovScale
+      + (boostActive ? C.fovBoostAdd * this.fovScale : 0);
     this._updateFov(targetFov, dt);
   }
 

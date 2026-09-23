@@ -1,6 +1,6 @@
 // ============================================================================
 // LocalizationManager - all UI text lives in this EN/IT dictionary.
-// No hardcoded UI strings anywhere else. Usage: i18n.t('race.lap').
+// No hardcoded UI strings anywhere else. Usage: i18n.t('hud.lapFormat', {lap, total}).
 // Supports {placeholder} interpolation.
 // ============================================================================
 
@@ -30,9 +30,61 @@ const BASE_STRINGS = {
   'settings.laps':     { en: 'Quick race laps',                     it: 'Giri gara rapida' },
   'settings.rivals':   { en: 'Rivals',                              it: 'Avversari' },
   'settings.back':     { en: 'Back',                                it: 'Indietro' },
+  'settings.size.normal': { en: 'Normal',                           it: 'Normale' },
+  'settings.size.large':  { en: 'Large',                            it: 'Grande' },
+  'settings.size.xlarge': { en: 'Extra large',                      it: 'Molto grande' },
+  'menu.pilotOf':      { en: 'Pilot: {name}',                       it: 'Pilota: {name}' },
+  'menu.kartOf':       { en: 'Kart: {name}',                        it: 'Kart: {name}' },
 
-  'controls.help':     { en: 'WASD / Arrows drive · SHIFT drift · SPACE aerial trick · R reset · ESC pause',
-                         it: 'WASD / Frecce guida · SHIFT derapata · SPACE acrobazia aerea · R reset · ESC pausa' },
+  'difficulty.beginner': { en: 'Beginner',                          it: 'Principiante' },
+  'difficulty.easy':     { en: 'Easy',                              it: 'Facile' },
+  'difficulty.normal':   { en: 'Normal',                            it: 'Normale' },
+  'difficulty.hard':     { en: 'Hard',                              it: 'Difficile' },
+  'difficulty.expert':   { en: 'Expert',                            it: 'Esperto' },
+  'difficulty.master':   { en: 'Master',                            it: 'Maestro' },
+
+  'settings.uiScale':    { en: 'UI scale',                          it: 'Dimensione interfaccia' },
+  'settings.reduceFx':   { en: 'Reduced effects',                   it: 'Effetti ridotti' },
+  'settings.colorblind': { en: 'Colorblind-friendly colors',        it: 'Colori per daltonici' },
+  'settings.keys':       { en: 'Key bindings',                      it: 'Comandi tastiera' },
+  'settings.resetKeys':  { en: 'Reset bindings',                    it: 'Ripristina comandi' },
+  'keys.press':          { en: 'Press a key… (Esc cancels)',        it: 'Premi un tasto… (Esc annulla)' },
+  'keys.action.throttle':{ en: 'Accelerate',                        it: 'Acceleratore' },
+  'keys.action.brake':   { en: 'Brake / Reverse',                   it: 'Freno / Retromarcia' },
+  'keys.action.left':    { en: 'Steer left',                        it: 'Sterzo a sinistra' },
+  'keys.action.right':   { en: 'Steer right',                       it: 'Sterzo a destra' },
+  'keys.action.drift':   { en: 'Drift',                             it: 'Derapata' },
+  'keys.action.trick':   { en: 'Aerial trick',                      it: 'Acrobazia aerea' },
+  'keys.action.item':    { en: 'Use power-up',                      it: 'Usa potenziamento' },
+  'keys.action.reset':   { en: 'Reset to track',                    it: 'Torna in pista' },
+  'keys.action.pause':   { en: 'Pause',                             it: 'Pausa' },
+  'keys.action.confirm': { en: 'Confirm',                           it: 'Conferma' },
+
+  'controls.help':     { en: 'WASD / Arrows drive · SHIFT drift · SPACE trick · E power-up · R reset · ESC pause · gamepad supported',
+                         it: 'WASD / Frecce guida · SHIFT derapata · SPACE acrobazia · E potenziamento · R reset · ESC pausa · gamepad supportato' },
+  'controls.gamepad':  { en: 'Gamepad: RT throttle · LT brake · X drift · Y power-up · A trick · START pause',
+                         it: 'Gamepad: RT accelera · LT frena · X derapata · Y potenziamento · A acrobazia · START pausa' },
+
+  'garage.title':      { en: 'Garage',                              it: 'Garage' },
+  'garage.character':  { en: 'Pilot',                               it: 'Pilota' },
+  'garage.chassis':    { en: 'Chassis',                             it: 'Telaio' },
+  'garage.wheels':     { en: 'Wheels',                              it: 'Ruote' },
+  'garage.paint':      { en: 'Paint',                               it: 'Vernice' },
+  'garage.stats':      { en: 'Effective stats',                     it: 'Statistiche effettive' },
+  'garage.lockedLevel':{ en: 'Reach level {level}',                 it: 'Raggiungi il livello {level}' },
+  'garage.locked':     { en: 'Locked',                              it: 'Bloccato' },
+  'garage.hint':       { en: 'All builds are side-grades: pick what fits your style.', it: 'Tutte le configurazioni sono equivalenti: scegli il tuo stile.' },
+  'stat.acceleration': { en: 'Acceleration',                        it: 'Accelerazione' },
+  'stat.topSpeed':     { en: 'Top speed',                           it: 'Velocità max' },
+  'stat.handling':     { en: 'Handling',                            it: 'Maneggevolezza' },
+  'stat.weight':       { en: 'Weight',                              it: 'Peso' },
+  'stat.driftControl': { en: 'Drift control',                       it: 'Controllo derapata' },
+  'stat.offRoad':      { en: 'Off-road',                            it: 'Fuoristrada' },
+
+  'ach.nightShift':    { en: 'Night Shift',                         it: 'Turno di Notte' },
+  'ach.nightShift.d':  { en: 'Set a time trial record on a night track', it: 'Stabilisci un record a tempo su una pista notturna' },
+  'ach.collector':     { en: 'Collector',                           it: 'Collezionista' },
+  'ach.collector.d':   { en: 'Earn ten other achievements',         it: 'Ottieni altri dieci traguardi' },
 
   'hud.lap':           { en: 'Lap',                                 it: 'Giro' },
   'hud.lapFormat':     { en: 'Lap {lap}/{total}',                   it: 'Giro {lap}/{total}' },

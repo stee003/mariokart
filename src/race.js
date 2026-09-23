@@ -171,7 +171,12 @@ export class RaceManager {
     const fNow = (cp.s - prog + L) % L;            // forward distance to cp after
     const crossed = fPrev <= 40 && fNow > fPrev;
 
-    if (crossed && Math.abs(v.surf.lateral) <= cp.halfW) {
+    // Shortcuts map their chute onto main-line progress, so a kart mid-chute
+    // legitimately advances THROUGH checkpoint arcs. Its line is validated by
+    // the surface system (useShortcut only engages on the designed chute), so
+    // the crossing always counts there. On the main road the lateral gate
+    // keeps honest racing lines required.
+    if (crossed && (v.surf.useShortcut || Math.abs(v.surf.lateral) <= cp.halfW)) {
       if (st.nextCp === 0) this._lapCompleted(kart);
       st.nextCp = (st.nextCp + 1) % cps.length;
     }
