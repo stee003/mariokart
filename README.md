@@ -12,7 +12,7 @@ EN 🇬🇧 / IT 🇮🇹**
 ## Play
 
 ```bash
-node server.mjs            # serves on http://localhost:8000
+npm start            # serves on http://localhost:8000
 ```
 
 `npm start` runs a tiny zero-dependency Node static server (`server.mjs`), so
