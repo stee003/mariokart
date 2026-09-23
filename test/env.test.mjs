@@ -52,7 +52,9 @@ for (const def of TRACK_DEFS) {
   const env = def.id === 'sunforge_circuit'
     ? buildEnvironment(scene, track)
     : buildThemedEnvironment(scene, track, 'TEST');
-  const kids = env.group.children.length;
+  // Count renderable descendants: instanced scenery is deliberately grouped.
+  let kids = 0;
+  env.group.traverse(o => { if (o.isMesh || o.isPoints) kids++; });
   check(`${def.id}: env populated (${def.theme}, ${kids} nodes)`, kids > 30, `children=${kids}`);
   check(`${def.id}: state.update animates`, typeof env.state.update === 'function');
   // animation step must not throw (obstacles sync with track sim)

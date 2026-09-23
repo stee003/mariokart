@@ -29,6 +29,8 @@ const PAD = 12;
 const _cache = new Map();          // `${id}@${w}x${h}` -> canvas
 
 function paletteFor(def) {
+  if (def?.id === 'granite_pass') return { bg: '#203f4b', road: '#99b5bd', edge: '#fff1d4', accent: '#cc7847' };
+  if (def?.id === 'abyss_dock') return { bg: '#103344', road: '#6bc1c5', edge: '#d8fff2', accent: '#32aab1' };
   return THEMES[def?.theme] || DEFAULT_THEME;
 }
 

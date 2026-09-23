@@ -19,6 +19,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
+import { EXPEDITION_KITS, buildExpeditionEnvironment } from './expeditionEnvironment.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const yawFor = (dir) => Math.atan2(dir.x, dir.z);
@@ -157,11 +158,12 @@ function buildSky(scene, group, kit) {
   );
   group.add(sky);
   scene.fog = new THREE.Fog(kit.fog[0], kit.fog[1], kit.fog[2]);
-  scene.add(new THREE.HemisphereLight(kit.hemi[0], kit.hemi[1], kit.hemi[2]));
+  const lightParent = kit.refinedRoad ? group : scene;
+  lightParent.add(new THREE.HemisphereLight(kit.hemi[0], kit.hemi[1], kit.hemi[2]));
   const sun = new THREE.DirectionalLight(kit.sun[0], kit.sun[1]);
   sun.position.set(...kit.sunPos);
-  scene.add(sun);
-  scene.add(new THREE.AmbientLight(kit.hemi[0], 0.18));
+  lightParent.add(sun);
+  lightParent.add(new THREE.AmbientLight(kit.hemi[0], 0.18));
 
   // optional starfield (night kits)
   if (kit.stars) {
@@ -210,7 +212,19 @@ function buildRoad(group, track, kit) {
     vertexColors: true,
     roughness: kit.wet ? 0.58 : 0.95,
     metalness: kit.wet ? 0.12 : 0.0,
+    side: kit.refinedRoad ? THREE.DoubleSide : THREE.FrontSide,
   });
+  if (kit.refinedRoad) {
+    // World-space asphalt grain: no UV seams at the lap join. Opt-in only.
+    roadMat.onBeforeCompile = shader => {
+      shader.vertexShader = 'varying vec3 vRoadWorld;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>',
+        '#include <begin_vertex>\n vRoadWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = 'varying vec3 vRoadWorld;\n' + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>',
+        '#include <color_fragment>\n float grain = fract(sin(dot(floor(vRoadWorld.xz * 24.0), vec2(12.9898,78.233))) * 43758.5453); diffuseColor.rgb *= 0.91 + grain * 0.09;');
+    };
+  }
   const S = track.samples;
   const hw = (sm) => sm.width / 2;
   const noise = (i) => (((i * 7919) % 13) / 13 - 0.5) * 0.05;
@@ -218,7 +232,7 @@ function buildRoad(group, track, kit) {
 
   // shoulder apron (flagship road2 kits)
   if (kit.road2) {
-    const apronMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+    const apronMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: kit.refinedRoad ? THREE.DoubleSide : THREE.FrontSide });
     for (const sideSign of [1, -1]) {
       ribbon(group, S,
         (sm) => sideSign * (hw(sm) + 2.8),
@@ -246,7 +260,7 @@ function buildRoad(group, track, kit) {
   }
   // solid edge lines just inside the curbs (flagship road2 kits)
   if (kit.road2) {
-    const lineMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    const lineMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: kit.refinedRoad ? THREE.DoubleSide : THREE.FrontSide });
     for (const sideSign of [1, -1]) {
       ribbon(group, S,
         (sm) => sideSign * (hw(sm) - 1.6),
@@ -329,7 +343,7 @@ function buildFinishAndBanner(group, track, bannerText, kit) {
     new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(bc), side: THREE.DoubleSide })
   );
   banner.position.copy(fin.pos).setY(fin.pos.y + 6.4);
-  banner.rotation.y = yawFor(fin.dir);
+  banner.rotation.y = yawFor(fin.dir) + (kit?.refinedRoad ? Math.PI : 0);
   group.add(banner);
 }
 
@@ -1388,12 +1402,19 @@ const FLAVORS = {
 // ----------------------------------------------------------------------------
 export function buildThemedEnvironment(scene, track, bannerName) {
   const theme = track.def.theme;
-  const kit = KITS[theme] || KITS.ruins;
+  const expedition = EXPEDITION_KITS[track.def.id];
+  const kit = expedition || KITS[theme] || KITS.ruins;
   const group = new THREE.Group();
   const colliders = [];
   const state = { padMaterials: [], obstacleMeshes: [], extras: [] };
   scene.add(group);
 
+  // Legacy worlds attach lights directly to the scene. Isolate the three new
+  // palettes from those lights while active, then restore the exact old state.
+  // New lights belong to the disposable world group and cannot leak on exit.
+  const previousLights = expedition
+    ? scene.children.filter(o => o.isLight).map(light => ({ light, visible: light.visible })) : [];
+  for (const { light } of previousLights) light.visible = false;
   const sunLight = buildSky(scene, group, kit);
 
   // ground (islands theme floats over void instead)
@@ -1404,19 +1425,20 @@ export function buildThemedEnvironment(scene, track, bannerName) {
       new THREE.MeshStandardMaterial({ color: kit.ground, roughness: 1 })
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = minY - 0.6;
+    ground.position.y = minY - (kit.groundDepth || 0.6);
     group.add(ground);
   }
 
   buildRoad(group, track, kit);
   buildFinishAndBanner(group, track, bannerName || 'SUNFORGE', kit);
   buildRampsAndPads(group, track, state);
-  buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
-  buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
+  if (!expedition) buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
+  if (!expedition) buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
   buildObstacles(group, track, state);
 
   const rnd = seeded(track.def.musicSeed * 1013 + 7);
-  (PROPS[theme] || PROPS.ruins)(group, track, rnd);
+  if (expedition) buildExpeditionEnvironment(group, track, rnd, state, colliders);
+  else (PROPS[theme] || PROPS.ruins)(group, track, rnd);
 
   // signature landmarks for the four flagship themed circuits
   const flavor = FLAVORS[track.def.id];
@@ -1441,5 +1463,7 @@ export function buildThemedEnvironment(scene, track, bannerName) {
     for (const fn of state.extras) fn(dt, time);
   };
 
-  return { group, colliders, state };
+  return { group, colliders, state, dispose() {
+    for (const { light, visible } of previousLights) light.visible = visible;
+  } };
 }

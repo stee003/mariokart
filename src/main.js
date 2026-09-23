@@ -173,6 +173,7 @@ class Game {
     // dispose previous world (environment group + kart meshes) so a long
     // session of track-hopping does not leak GPU buffers
     if (this.env) {
+      this.env.dispose?.();
       this.scene.remove(this.env.group);
       disposeTree(this.env.group);
     }

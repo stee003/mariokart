@@ -231,7 +231,7 @@ export const CONTENT_STRINGS = {
   'track.granite.teach': { en: 'Brake planning into switchbacks', it: 'Pianificare la frenata nei tornanti' },
   'track.granite.mechanic': { en: 'A mountain climb with timed flame vents', it: 'Una scalata con getti di fiamma a tempo' },
   'track.magma': { en: 'Magma Coil', it: 'Spira di Magma' },
-  'track.magma.teach': { en: 'Precision on a narrow, hostile line', it: 'Precisione su una linea stretta e ostile' },
+  'track.magma.teach': { en: 'Linking drifts around the caldera', it: 'Collegare derapate intorno al cratere' },
   'track.magma.mechanic': { en: 'Rhythmic flame jets inside the caldera', it: 'Getti di fiamma ritmici dentro il cratere' },
   'track.abyss': { en: 'Abyss Dock', it: 'Darsena dell\u2019Abisso' },
   'track.abyss.teach': { en: 'Using currents and buoyancy chambers', it: 'Sfruttare correnti e camere di galleggiamento' },
