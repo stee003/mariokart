@@ -51,6 +51,42 @@ export function buildTheme(musicSeed, theme) {
   return { mode, root, tempo, bass, lead, drive, theme };
 }
 
+// ----------------------------------------------------------------------------
+// Rich theme specs.
+//
+// A handful of flagship tracks ship a hand-arranged soundtrack instead of a
+// seeded pattern. The spec (def.music in trackDefs.js) is a 4-bar loop on an
+// 8th-note grid (32 steps; steps 0-7 = bar 1, 8-15 = bar 2, ...):
+//
+//   bpm, mode, root        - clock + scale + bass-octave reference (Hz)
+//   chords                 - 4 chords, one per bar, as scale degrees
+//   drums {kick,snare,hat,open} - 32 boolean step patterns
+//   bass, lead             - 32 scale degrees or null (rests)
+//   leadType, bassType     - oscillator waveforms
+//   drive                  - 0..1.2 master energy (drums + layer loudness)
+//   arp                    - weave 8th-note chord arpeggio between lead notes
+//
+// Everything is deterministic: a track always plays the same arrangement.
+// Tracks WITHOUT a rich spec keep going through buildTheme() unchanged.
+// ----------------------------------------------------------------------------
+function buildRichTheme(spec) {
+  return {
+    rich: true,
+    theme: spec.theme,
+    mode: spec.mode,
+    root: spec.root,
+    tempo: spec.bpm,
+    bass: spec.bass,
+    lead: spec.lead,
+    chords: spec.chords,
+    drums: spec.drums,
+    leadType: spec.leadType || 'square',
+    bassType: spec.bassType || 'sawtooth',
+    drive: spec.drive ?? 1,
+    arp: !!spec.arp,
+  };
+}
+
 export class MusicManager {
   constructor(saveManager) {
     this.save = saveManager;
@@ -87,8 +123,12 @@ export class MusicManager {
     if (this.master) this.master.gain.setTargetAtTime(v * v, this.ctx.currentTime, 0.1);
   }
 
-  setTheme(musicSeed, theme) {
-    this.theme = buildTheme(musicSeed, theme);
+  // `richSpec` (def.music) opts the track into the hand-arranged engine;
+  // without it the seeded generator is used, exactly as before.
+  setTheme(musicSeed, theme, richSpec = null) {
+    this.theme = richSpec
+      ? buildRichTheme({ ...richSpec, theme })
+      : buildTheme(musicSeed, theme);
   }
 
   setState(state) {
@@ -164,7 +204,105 @@ export class MusicManager {
     o.start(t); o.stop(t + 0.2);
   }
 
+  _snare(t, peak) {
+    // noise crack + short body thump, bandpassed for a dry snare
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noise;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 0.9;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t); src.stop(t + 0.18);
+    const o = this.ctx.createOscillator();
+    o.type = 'triangle'; o.frequency.value = 190;
+    const g2 = this.ctx.createGain();
+    g2.gain.setValueAtTime(peak * 0.7, t);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    o.connect(g2); g2.connect(this.master);
+    o.start(t); o.stop(t + 0.08);
+  }
+
+  // Map a scale-degree index to semitones above the root (wraps octaves).
+  _scaleSemis(d) {
+    const sc = SCALES[this.theme.mode] || SCALES.major;
+    const n = sc.length;
+    const i = ((d % n) + n) % n;
+    return sc[i] + 12 * Math.floor(d / n);
+  }
+
+  // ----------------------------------------------------------- rich engine
+  // Plays the hand-arranged 4-bar loop. Same states as the generator path:
+  // menu = pad bed, racing = full arrangement, finalLap = +12% tempo and an
+  // octave lead layer, countdown = riser, victory/defeat = stinger + bed.
+  _playStepRich(step, t, spb) {
+    const th = this.theme;
+    const s = this.state;
+    const racing = s === 'racing' || s === 'finalLap' || s === 'battle';
+    const calm = s === 'menu' || s === 'victory' || s === 'defeat' || s === 'countdown';
+    const drive = (s === 'countdown') ? th.drive * 0.55
+      : calm ? 0.38 : th.drive;
+    const bar = Math.floor(step / 8) % 4;
+    const chord = th.chords[bar] || [0, 2, 4];
+    const freq = (base, d) => base * Math.pow(2, this._scaleSemis(d) / 12);
+
+    // drums ---------------------------------------------------------------
+    if (racing) {
+      const d = th.drums;
+      if (d.kick[step]) this._kick(t, 0.2 * drive);
+      if (d.snare[step]) this._snare(t, 0.085 * drive);
+      if (d.hat[step]) this._hat(t, (step % 2 === 0 ? 0.038 : 0.022) * drive);
+      if (d.open[step]) this._hat(t, 0.05 * drive, true);
+    } else if (s === 'countdown') {
+      // ticking pulse under the riser
+      if (step % 2 === 0) this._hat(t, 0.03 * drive, step === 14 || step === 30);
+    }
+
+    // sustained pad chord, one per bar ------------------------------------
+    if (step % 8 === 0) {
+      const padDur = spb * 7.6;
+      const padGain = calm ? 0.02 : 0.026 * drive;
+      for (const d of chord) {
+        this._tone(freq(th.root, d), t, padDur, 'triangle', padGain);
+        this._tone(freq(th.root * 2, d), t, padDur, 'sine', padGain * 0.5);
+      }
+    }
+
+    // 8th-note arp weaving the chord (racing only) -------------------------
+    if (th.arp && racing && step % 2 === 1) {
+      const idx = [0, 1, 2, 1][Math.floor(step / 2) % 4];
+      this._tone(freq(th.root * 2, chord[idx % chord.length]), t, spb * 0.9, 'triangle', 0.02 * drive);
+    }
+
+    // bass -------------------------------------------------------------------
+    const bd = th.bass[step];
+    if (bd !== null && (racing || calm || s === 'countdown')) {
+      const f = freq(th.root, bd);
+      this._tone(f, t, spb * 1.9, th.bassType, 0.075 * (calm ? 0.6 : 1) * (s === 'countdown' ? 0.8 : 1));
+      if (racing && th.drums.kick[step]) this._tone(f * 0.5, t, spb * 1.9, 'triangle', 0.05 * drive);
+    }
+
+    // lead motif -------------------------------------------------------------
+    const ld = th.lead[step];
+    if (ld !== null) {
+      const play = racing || (calm && step % 4 === 0) || s === 'countdown';
+      if (play) {
+        const f = freq(th.root * 2, ld);
+        const gain = (calm || s === 'countdown') ? 0.035 : 0.05;
+        this._tone(f, t, spb * (s === 'finalLap' ? 1.5 : 1.05), th.leadType, gain * (s === 'countdown' ? 0.6 : 1));
+        if (s === 'finalLap') this._tone(f * 2, t, spb * 0.8, 'triangle', 0.018);
+      }
+    }
+
+    // countdown tension riser ------------------------------------------------
+    if (s === 'countdown' && step % 2 === 0) {
+      this._tone(th.root * 2 * Math.pow(2, step / 16), t, spb * 0.9, 'sine', 0.045);
+    }
+  }
+
   _playStep(step, t, spb) {
+    if (this.theme.rich) { this._playStepRich(step, t, spb); return; }
     const th = this.theme;
     const s = this.state;
     const racing = s === 'racing' || s === 'finalLap' || s === 'battle' || s === 'countdown';
