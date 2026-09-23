@@ -149,7 +149,7 @@ export class RaceManager {
       }
       // AI rocket starts by personality
       for (const kart of this.karts) {
-        if (!kart.isPlayer && kart.ai && Math.random() < kart.ai.p.startBoostChance) {
+        if (!kart.isPlayer && kart.ai && Math.random() < kart.ai.dp.startBoostChance) {
           kart.vehicle.boost.trigger(0, 'start');
         }
       }

@@ -26,6 +26,9 @@ const BASE_STRINGS = {
   'settings.camHeight':{ en: 'Camera height',                       it: 'Altezza telecamera' },
   'settings.volume':   { en: 'Volume',                              it: 'Volume' },
   'settings.music':    { en: 'Music volume',                        it: 'Volume musica' },
+  'settings.difficulty': { en: 'AI difficulty',                     it: 'Difficoltà IA' },
+  'settings.laps':     { en: 'Quick race laps',                     it: 'Giri gara rapida' },
+  'settings.rivals':   { en: 'Rivals',                              it: 'Avversari' },
   'settings.back':     { en: 'Back',                                it: 'Indietro' },
 
   'controls.help':     { en: 'WASD / Arrows drive · SHIFT drift · SPACE aerial trick · R reset · ESC pause',

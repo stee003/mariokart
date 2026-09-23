@@ -36,6 +36,11 @@ import { CUPS, getCup, trophyAtLeast } from './content/cups.js';
 import { GrandPrixSession } from './grandprix.js';
 import { TimeTrialSession, RecordsStore } from './timetriial.js';
 import { GhostPlayer, deserializeGhost } from './ghost.js';
+import { DIFFICULTY_TIERS, getDifficulty } from './aiDifficulty.js';
+import { applyEvent, getProgress } from './progression.js';
+import { recordStats, checkAchievements, trackPlayed } from './achievements.js';
+import { LocalLeaderboard } from './leaderboard.js';
+import { LocalProvider } from './online.js';
 
 const FIXED_DT = 1 / 60;
 
@@ -47,6 +52,8 @@ class Game {
     this.audio = new AudioManager(this.save);
     this.music = new MusicManager(this.save);
     this.records = new RecordsStore(this.save);
+    this.leaderboard = new LocalLeaderboard(this.save);
+    this.provider = new LocalProvider(this.leaderboard);
     this.appState = 'menu';          // menu | race
     this.settingsReturn = 'screen-main';
 
@@ -89,8 +96,9 @@ class Game {
   // --------------------------------------------------------------- world load
   // (Re)builds track + environment + items + karts for a track definition id.
   // The vehicle physics, drift, camera and race systems are reused untouched;
-  // only world content swaps. `solo` registers only the player (time trials).
-  _loadTrack(trackId, first = false, { solo = false } = {}) {
+  // only world content swaps. `solo` registers only the player (time trials);
+  // `rivals` (0-3) trims the AI grid for custom quick races.
+  _loadTrack(trackId, first = false, { solo = false, rivals = 3 } = {}) {
     const def = getTrackDef(trackId);
     this.trackId = def.id;
     this.save.set('lastTrack', def.id);
@@ -144,9 +152,8 @@ class Game {
       { nameKey: 'ai.cinder',  color: 0xd9452f, accent: 0xffd23f, pilot: 0x53302a, ai: 'aggressive' },
       { nameKey: 'ai.zephyr',  color: 0x2fa877, accent: 0xd8f4e6, pilot: 0x3c5c4e, ai: 'balanced' },
       { nameKey: 'ai.bastion', color: 0x4159c9, accent: 0x9fb4ff, pilot: 0x37406e, ai: 'defensive' },
-    ];
-    if (!solo) roster.push({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
-    else roster.unshift({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
+    ].slice(0, solo ? 0 : Math.max(0, Math.min(3, rivals)));
+    roster.push({ nameKey: 'ai.you', color: 0xff8a2a, accent: 0x2fd8c8, pilot: 0xf2a65a, ai: null });
 
     this.race = new RaceManager({
       track: this.track, hud: this.hud, audio: this.audio, i18n: this.i18n,
@@ -166,15 +173,24 @@ class Game {
         isPlayer: d.ai === null,
         charVis: vis.charVis || null,
       };
+      if (kart.ai) kart.ai.setDifficulty(this.save.get('difficulty', 'normal'));
       this.race.registerKart(kart);
     }
     this.playerKart = this.race.karts.find((k) => k.isPlayer);
 
     // place karts on the grid for the menu backdrop
-    const grid = this.track.startGrid();
-    this.race.karts.forEach((k, i) => k.vehicle.place(grid[i]));
+    this._placeOnGrid();
 
+    trackPlayed(this.save, def.id);
     this.music.setTheme(def.musicSeed, def.theme);
+  }
+
+  // AI takes the front slots; the player always starts from the back slot.
+  _placeOnGrid() {
+    const grid = this.track.startGrid();
+    const ais = this.race.karts.filter((k) => !k.isPlayer);
+    ais.forEach((k, i) => k.vehicle.place(grid[i]));
+    this.playerKart.vehicle.place(grid[3]);
   }
 
   _removeGhostVis() {
@@ -235,8 +251,8 @@ class Game {
       $('lang-en').classList.toggle('selected', this.i18n.lang === 'en');
       $('lang-it').classList.toggle('selected', this.i18n.lang === 'it');
     };
-    $('lang-en').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('en'); this.audio.click(); syncLang(); this._refreshLists(); });
-    $('lang-it').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('it'); this.audio.click(); syncLang(); this._refreshLists(); });
+    $('lang-en').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('en'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
+    $('lang-it').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('it'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     syncLang();
 
     // sliders
@@ -274,6 +290,58 @@ class Game {
     $('items-on').addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set('itemsEnabled', true); syncItems(); });
     $('items-off').addEventListener('click', () => { this.audio.init(); this.audio.click(); this.save.set('itemsEnabled', false); syncItems(); });
     syncItems();
+
+    // option groups: difficulty tiers, quick-race laps, rival count
+    this._buildOptionGroup('difficulty-list',
+      DIFFICULTY_TIERS.map((d) => ({ value: d.tier, labelKey: d.nameKey })),
+      () => this.save.get('difficulty', 'normal'),
+      (v) => {
+        this.save.set('difficulty', v);
+        for (const kart of this.race.karts) {
+          if (kart.ai) kart.ai.setDifficulty(v);
+        }
+      });
+    this._buildOptionGroup('laps-list',
+      [1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) })),
+      () => this.save.get('quickLaps', 3),
+      (v) => this.save.set('quickLaps', v));
+    this._buildOptionGroup('rivals-list',
+      [0, 1, 2, 3].map((n) => ({ value: n, label: String(n) })),
+      () => this.save.get('quickRivals', 3),
+      (v) => this.save.set('quickRivals', v));
+  }
+
+  _buildOptionGroup(containerId, options, getCurrent, onSet) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    const buttons = [];
+    for (const opt of options) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-small';
+      btn.textContent = opt.labelKey ? this.i18n.t(opt.labelKey) : opt.label;
+      btn.addEventListener('click', () => {
+        this.audio.init(); this.audio.click();
+        onSet(opt.value);
+        sync();
+      });
+      container.appendChild(btn);
+      buttons.push({ btn, opt });
+    }
+    const sync = () => {
+      const cur = getCurrent();
+      for (const { btn, opt } of buttons) {
+        btn.textContent = opt.labelKey ? this.i18n.t(opt.labelKey) : opt.label;
+        btn.classList.toggle('selected', opt.value === cur);
+      }
+    };
+    sync();
+    this._optionGroups = this._optionGroups || [];
+    this._optionGroups.push(sync);
+  }
+
+  _refreshOptionGroups() {
+    for (const sync of this._optionGroups || []) sync();
   }
 
   openSettings() { this.hud.showScreen('screen-settings'); }
@@ -361,7 +429,8 @@ class Game {
 
   _startModeOnTrack(mode, trackId) {
     this.mode = mode;
-    this._loadTrack(trackId, false, { solo: mode === 'timetrial' });
+    const rivals = mode === 'quick' ? this.save.get('quickRivals', 3) : 3;
+    this._loadTrack(trackId, false, { solo: mode === 'timetrial', rivals });
     if (mode === 'timetrial') {
       const rec = this.records.get(trackId);
       this.ghostPlayer = rec?.ghost
@@ -384,13 +453,18 @@ class Game {
     // mode-specific setup
     if (this.mode === 'grandprix' && this.gpSession) {
       this.race.lapsOverride = this.gpSession.laps;
+    } else if (this.mode === 'quick') {
+      this.race.lapsOverride = this.save.get('quickLaps', 3);
     } else if (this.mode === 'timetrial') {
       this.race.lapsOverride = 3;
       this.ttSession = new TimeTrialSession(this.trackId);
       this.ttSession.start(0);
       this.ghostPlayer?.reset();
       this._setupGhostVis();
-      if (this.ghostPlayer) this.hud.notify(this.i18n.t('tt.raceGhost'));
+      if (this.ghostPlayer) {
+        this.hud.notify(this.i18n.t('tt.raceGhost'));
+        recordStats(this.save, { ghostsRaced: 1 });
+      }
     } else {
       this.race.lapsOverride = null;
     }
@@ -443,8 +517,7 @@ class Game {
     this.itemVisuals.update(0, this.time, this.items);
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;
     this._removeGhostVis();
-    const grid = this.track.startGrid();
-    this.race.karts.forEach((k, i) => k.vehicle.place(grid[i]));
+    this._placeOnGrid();
   }
 
   setPaused(on) {
@@ -470,6 +543,7 @@ class Game {
     } else if (type === 'playerFinished') {
       this.music.setState(payload.pos <= 3 ? 'victory' : 'defeat');
     } else if (type === 'lapComplete') {
+      if (payload.kart.isPlayer) recordStats(this.save, { laps: 1 });
       if (this.mode === 'timetrial' && this.ttSession && payload.kart.isPlayer) {
         this.ttSession.onLap(this.race.raceTime, payload.lapTime);
       }
@@ -538,6 +612,13 @@ class Game {
         bestLap: this.race.kartState.get(kart.vehicle).bestLap,
       }));
       const standings = this.gpSession.recordRace(rows);
+      const playerPos = rows.find((r) => r.nameKey === 'ai.you')?.pos ?? rows.length;
+      const pst = this.race.kartState.get(this.playerKart.vehicle);
+      const fastest = pst.bestLap !== null && rows.every((r) => (pst.bestLap ?? Infinity) <= (r.bestLap ?? Infinity));
+      recordStats(this.save, {
+        races: 1, wins: playerPos === 1 ? 1 : 0,
+        podiums: playerPos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+      });
 
       const div = document.createElement('div');
       div.className = 'gp-extra';
@@ -567,11 +648,16 @@ class Game {
           trophyLine.textContent = i18n.t('gp.trophyWon', { trophy: i18n.t('trophy.' + standings.trophy) });
           const trophies = this._trophies();
           const prev = trophies[this.gpSession.cup.id];
-          const order = ['bronze', 'silver', 'gold', 'platinum'];
-          if (!prev || order.indexOf(standings.trophy) > order.indexOf(prev)) {
+          const trophyOrder = ['bronze', 'silver', 'gold', 'platinum'];
+          if (!prev || trophyOrder.indexOf(standings.trophy) > trophyOrder.indexOf(prev)) {
             trophies[this.gpSession.cup.id] = standings.trophy;
             this.save.set('trophies', trophies);
           }
+          recordStats(this.save, {
+            cups: 1,
+            cupsGold: standings.trophy === 'gold' ? 1 : 0,
+            cupsPlatinum: standings.trophy === 'platinum' ? 1 : 0,
+          });
           this.music.setState('victory');
         } else {
           trophyLine.textContent = i18n.t('gp.noTrophy');
@@ -583,6 +669,13 @@ class Game {
       restartBtn.textContent = this.gpSession.finished
         ? i18n.t('menu.main')
         : i18n.t('menu.continue');
+      this._finishProgression(
+        { kind: 'gpRace', pos: playerPos, rivals: rows.length - 1 },
+        {
+          boardTime: pst.finishTime,
+          trophy: standings ? standings.trophy : null,
+        },
+      );
     } else if (this.mode === 'timetrial' && this.ttSession) {
       const result = this.ttSession.finish();
       const updated = this.records.submit({
@@ -613,8 +706,60 @@ class Game {
       extra.appendChild(div);
       restartBtn.textContent = i18n.t('menu.restart');
       this.music.setState(updated.length ? 'victory' : 'menu');
+      recordStats(this.save, {
+        races: 1,
+        records: updated.length,
+        fastestLaps: updated.includes('lap') ? 1 : 0,
+      });
+      this._finishProgression({
+        kind: 'tt',
+        totalRecord: updated.includes('total'),
+        lapRecord: updated.includes('lap'),
+      }, { boardTime: result.totalTime });
     } else {
       restartBtn.textContent = i18n.t('menu.restart');
+      const order = this.race.positions();
+      const pos = order.findIndex((k) => k.isPlayer) + 1;
+      const pst = this.race.kartState.get(this.playerKart.vehicle);
+      const fastest = pst.bestLap !== null && order.every((k) => {
+        const st = this.race.kartState.get(k.vehicle);
+        return pst.bestLap <= (st.bestLap ?? Infinity);
+      });
+      recordStats(this.save, {
+        races: 1, wins: pos === 1 ? 1 : 0,
+        podiums: pos <= 3 ? 1 : 0, fastestLaps: fastest ? 1 : 0,
+      });
+      this._finishProgression({ kind: 'race', pos, rivals: order.length - 1 },
+        { boardTime: pst.finishTime });
+    }
+  }
+
+  // XP + level-ups + unlocks + achievements + local leaderboard, with toasts.
+  _finishProgression(event, { boardTime = null, trophy = null } = {}) {
+    const i18n = this.i18n;
+    if (boardTime != null) {
+      const rank = this.leaderboard.submit(this.trackId, {
+        name: i18n.t('ai.you'), time: boardTime,
+      });
+      if (rank) this.hud.notify(i18n.t('race.boardRank', { rank }));
+    }
+    const res = applyEvent(this.save, event);
+    if (res.gained > 0) this.hud.notify(i18n.t('progression.xp', { xp: res.gained }));
+    if (trophy) {
+      const trophyRes = applyEvent(this.save, { kind: 'trophy', trophy });
+      if (trophyRes.gained > 0) this.hud.notify(i18n.t('progression.xp', { xp: trophyRes.gained }));
+      res.levelAfter = Math.max(res.levelAfter, trophyRes.levelAfter);
+      res.newUnlocks.push(...trophyRes.newUnlocks);
+    }
+    if (res.levelAfter > res.levelBefore) {
+      this.hud.notify(i18n.t('progression.levelUp', { level: res.levelAfter }));
+      for (const u of res.newUnlocks.slice(0, 2)) {
+        this.hud.notify(i18n.t('progression.unlocked', { item: i18n.t(u.nameKey) }));
+      }
+    }
+    const fresh = checkAchievements(this.save, getProgress(this.save));
+    if (fresh.length) {
+      this.hud.notify(i18n.t('achievement.earned', { name: i18n.t(fresh[0].nameKey) }));
     }
   }
 
@@ -624,11 +769,15 @@ class Game {
     if (type === 'itemGet') {
       this.burstAt(payload.pos ?? payload.kart?.vehicle?.pos, 0x2fd8c8, 8);
       if (payload.isPlayer) {
+        recordStats(this.save, { itemsTaken: 1 });
         this.hud.setItem(payload.itemId);
         this.hud.notify(this.i18n.t('race.gotItem', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
       }
     } else if (type === 'itemUse') {
-      if (payload.kart?.isPlayer) this.hud.setItem(this.items.heldItem(player));
+      if (payload.kart?.isPlayer) {
+        recordStats(this.save, { itemsUsed: 1 });
+        this.hud.setItem(this.items.heldItem(player));
+      }
     } else if (type === 'itemHit') {
       this.burstAt(payload.pos, ITEMS[payload.itemId]?.color ?? 0xffffff, 16);
       this.camCtl.addTrauma(0.35);

@@ -297,3 +297,9 @@ input[type="range"]::-moz-range-thumb {
   margin-top: 12px; font-size: 22px; font-weight: 900; font-style: italic;
   color: var(--accent2, #2fd8c8); text-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
 }
+
+/* ---------------- option toggles (difficulty / laps / rivals) ---------------- */
+.opt-toggle {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+}
+.opt-toggle .btn-small { min-width: 44px; }

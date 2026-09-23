@@ -7,6 +7,7 @@
 import { CONFIG } from './config.js';
 import { normalizeAngle } from './vehicle.js';
 import { ITEMS as ITEMS_BY_ID } from './content/items.js';
+import { effectiveParams, DEFAULT_DIFFICULTY } from './aiDifficulty.js';
 
 const A = CONFIG.ai;
 
@@ -16,6 +17,8 @@ export class AIController {
     this.track = track;
     this.personalityKey = personalityKey;
     this.p = A.personalities[personalityKey];
+    this.difficulty = DEFAULT_DIFFICULTY;
+    this.dp = effectiveParams(this.p, this.difficulty);
     this.mistakeTimer = 0;
     this.liftTimer = 0;
     this.wobble = 0;
@@ -25,6 +28,12 @@ export class AIController {
     this.stuckTimer = 0;
     this.seed = Math.random() * 1000;
     this.itemCooldown = 1 + Math.random() * 2;
+  }
+
+  // Difficulty changes decision quality only - never top speed.
+  setDifficulty(tier) {
+    this.difficulty = tier;
+    this.dp = effectiveParams(this.p, tier);
   }
 
   // Produces the same input shape the player's InputManager produces.
@@ -45,7 +54,7 @@ export class AIController {
     this.mistakeTimer -= dt;
     if (this.mistakeTimer <= 0) {
       this.mistakeTimer = 4 + Math.random() * 8;
-      if (Math.random() < this.p.mistakeRate * 10) {
+      if (Math.random() < this.dp.mistakeRate * 10) {
         this.liftTimer = 0.3 + Math.random() * 0.4;
         this.wobble = (Math.random() - 0.5) * 0.5;
       }
@@ -53,7 +62,7 @@ export class AIController {
     if (this.liftTimer > 0) this.liftTimer -= dt;
 
     // --- steering target -----------------------------------------------------
-    const lookahead = A.lookaheadBase + speed * A.lookaheadSpeedK;
+    const lookahead = (A.lookaheadBase + speed * A.lookaheadSpeedK) * this.dp.lookaheadMult;
     const la = track.lineAt(s + lookahead);
     const ahead = track.pointAt(s + lookahead);
 
@@ -95,7 +104,7 @@ export class AIController {
     for (let d = 0; d <= horizon; d += 3.5) {
       vTarget = Math.min(vTarget, track.lineAt(s + d).targetSpeed);
     }
-    vTarget *= this.p.cornerSpeed * this.p.targetSpeed;
+    vTarget *= this.dp.cornerSpeed * this.p.targetSpeed;
 
     if (this.liftTimer > 0) vTarget *= 0.72;
 
@@ -109,7 +118,7 @@ export class AIController {
     if (!v.drift.drifting && this.driftCooldown <= 0 &&
         curvAhead > 0.028 && speed > CONFIG.drift.minSpeed * 0.95 &&
         Math.abs(input.steer) > 0.35 &&
-        Math.random() < this.p.driftEagerness) {
+        Math.random() < this.dp.driftEagerness) {
       this.driftHold = 0.5 + curvAhead * 14;
       this.driftCooldown = 2.5;
     }
@@ -117,7 +126,7 @@ export class AIController {
       this.driftHold -= dt;
       input.drift = true;
       // defensive personalities dump weak charges instead of hoarding them
-      if (v.drift.level >= (this.p.boostUse > 0.8 ? 3 : this.p.boostUse > 0.6 ? 2 : 1)) {
+      if (v.drift.level >= (this.dp.boostUse > 0.8 ? 3 : this.dp.boostUse > 0.6 ? 2 : 1)) {
         this.driftHold = Math.min(this.driftHold, 0.15);
       }
     }
@@ -155,7 +164,9 @@ export class AIController {
   // Skill-flavored but never unfair - it only chooses WHEN to use an item
   // the roulette already gave it.
   _shouldUseItem(def, karts, v, track, s) {
-    const eag = this.p.boostUse;   // reuse boost-usage as item eagerness
+    const eag = Math.min(1.3, this.dp.boostUse);   // item eagerness, skill-scaled
+    const skill = this.dp.itemSkill;               // scales use-decision rolls only
+    const roll = (base) => Math.random() < Math.min(1, base * skill);
     const fwdX = Math.sin(v.yaw), fwdZ = Math.cos(v.yaw);
 
     const aheadDist = () => {
@@ -187,27 +198,27 @@ export class AIController {
     switch (def.category) {
       case 'projectile': {
         const d = aheadDist();
-        if (d < 42 && straight && Math.random() < 0.5 + eag * 0.4) return true;
-        return d < 20 && Math.random() < 0.3;
+        if (d < 42 && straight && roll(0.5 + eag * 0.4)) return true;
+        return d < 20 && roll(0.3);
       }
       case 'hazard': {
         // drop traps when someone is close behind or on a straight before a corner
         const bd = behindDist();
-        if (bd < 22 && Math.random() < 0.4 + eag * 0.3) return true;
-        return straight && Math.random() < 0.12;
+        if (bd < 22 && roll(0.4 + eag * 0.3)) return true;
+        return straight && roll(0.12);
       }
       case 'buff':
         // use boosts/attack buffs on straights
-        return straight && Math.random() < 0.35 + eag * 0.45;
+        return straight && roll(0.35 + eag * 0.45);
       case 'debuff':
       case 'zone': {
         const d = aheadDist();
-        return (d < 48 || behindDist() < 30) && Math.random() < 0.3 + eag * 0.4;
+        return (d < 48 || behindDist() < 30) && roll(0.3 + eag * 0.4);
       }
       case 'utility':
-        return Math.random() < 0.25 + eag * 0.3;
+        return roll(0.25 + eag * 0.3);
       default:
-        return Math.random() < 0.2;
+        return roll(0.2);
     }
   }
 }
