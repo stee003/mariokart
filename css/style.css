@@ -144,6 +144,27 @@ html, body {
 }
 @keyframes blink { 50% { opacity: 0.25; } }
 
+/* ---------------- Minimap ---------------- */
+#minimap-box {
+  position: absolute; top: 74px; right: 18px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: 16px;
+  padding: 8px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+  line-height: 0;
+}
+#minimap { width: 176px; height: 176px; display: block; }
+
+/* smaller on short viewports so it never crowds the HUD chips */
+@media (max-height: 700px) {
+  #minimap { width: 132px; height: 132px; }
+  #minimap-box { top: 66px; }
+}
+body[data-uiscale="115"] #minimap { width: 196px; height: 196px; }
+body[data-uiscale="130"] #minimap { width: 216px; height: 216px; }
+
 /* ---------------- Screens / menus ---------------- */
 .screen {
   position: absolute; inset: 0;
@@ -257,6 +278,8 @@ input[type="range"]::-moz-range-thumb {
 /* ---------------- Mode / track / cup selection ---------------- */
 .mode-buttons .btn { font-size: 22px; padding: 15px 30px; }
 .wide-card { min-width: 520px; max-width: 680px; }
+/* the track-select card carries a side-by-side preview, so it runs wider */
+#screen-trackselect .wide-card { max-width: 940px; }
 .list-scroll {
   display: flex; flex-direction: column; gap: 8px;
   max-height: 46vh; overflow-y: auto;
@@ -277,6 +300,69 @@ input[type="range"]::-moz-range-thumb {
 }
 .list-row.locked { opacity: 0.55; cursor: not-allowed; }
 .list-row.locked:hover { transform: none; box-shadow: none; }
+.list-row.active {
+  border-color: var(--accent2, #2fd8c8);
+  background: rgba(24, 60, 56, 0.6);
+  box-shadow: 0 0 0 1px rgba(47, 216, 200, 0.4) inset;
+}
+
+/* ---------------- Track preview (map selection) ---------------- */
+.select-split {
+  display: flex; gap: 18px; align-items: flex-start;
+  margin-bottom: 18px; text-align: left;
+}
+.select-split .list-scroll { flex: 1 1 46%; min-width: 0; margin-bottom: 0; }
+
+.preview-pane {
+  flex: 1 1 54%; min-width: 0;
+  background: rgba(20, 11, 6, 0.55);
+  border: 1px solid var(--panel-line);
+  border-radius: 14px;
+  padding: 10px;
+}
+.preview-pane canvas {
+  width: 100%; height: auto; display: block;
+  border-radius: 10px;
+  background: #140b06;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.preview-name {
+  margin-top: 10px;
+  font-size: 19px; font-weight: 800; font-style: italic; color: #ffe8c8;
+}
+.preview-teach {
+  margin-top: 3px; font-size: 13px; line-height: 1.45; color: #d8a878;
+}
+.preview-stats {
+  margin-top: 8px; font-size: 12px; color: #ffcf9a;
+  font-variant-numeric: tabular-nums;
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+}
+.preview-legend {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px solid rgba(255, 178, 96, 0.18);
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-size: 11px; color: #c9a482;
+}
+.preview-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.preview-legend .lg::before {
+  content: ''; width: 9px; height: 9px; border-radius: 2px; flex: none;
+}
+.lg-shortcut::before { background: #50f0dc; }
+.lg-pad::before      { background: #40f0e0; border-radius: 50% !important; }
+.lg-ramp::before     { background: #ffe08a; }
+.lg-box::before      { background: #78e6ff; }
+
+/* the battle screen shows its arena preview full-width under the list */
+.preview-inline { margin: 4px 0 14px; }
+.preview-inline canvas { max-height: 190px; object-fit: contain; }
+
+/* stack the preview under the list when the card gets narrow */
+@media (max-width: 880px), (max-height: 620px) {
+  .select-split { flex-direction: column; }
+  .select-split .list-scroll { width: 100%; max-height: 28vh; }
+  .preview-pane { width: 100%; }
+}
 
 /* ---------------- Grand Prix / time trial results extras ---------------- */
 .gp-extra { margin: 6px 0 18px; }

@@ -1,6 +1,9 @@
 // Authoritative multiplayer primitives. The browser may predict locally, but these
 // objects are deliberately usable on a server (no THREE/browser dependencies).
 export const MODES = ['casual', 'grandprix', 'private', 'ranked', 'battle'];
+// Lobby capacity: 8 racers per room (matches the offline grid in config.js).
+export const MAX_PLAYERS = 8;
+export const MIN_PLAYERS = 2;
 export const REGIONS = ['na', 'sa', 'eu', 'asia', 'oce'];
 export const TICK_RATE = 30;
 
@@ -27,8 +30,8 @@ export class AntiCheat {
 }
 
 export class AuthoritativeRace {
-  constructor({ id = crypto.randomUUID?.() || `race-${Date.now()}`, mode = 'casual', track = 'sunforge_circuit', laps = 3, maxPlayers = 12, rules = {} } = {}) {
-    this.id = id; this.mode = mode; this.track = track; this.laps = laps; this.maxPlayers = Math.min(12, Math.max(2, maxPlayers)); this.rules = rules; this.phase = 'lobby'; this.tick = 0; this.players = new Map(); this.events = []; this.startedAt = 0;
+  constructor({ id = crypto.randomUUID?.() || `race-${Date.now()}`, mode = 'casual', track = 'sunforge_circuit', laps = 3, maxPlayers = MAX_PLAYERS, rules = {} } = {}) {
+    this.id = id; this.mode = mode; this.track = track; this.laps = laps; this.maxPlayers = Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, maxPlayers)); this.rules = rules; this.phase = 'lobby'; this.tick = 0; this.players = new Map(); this.events = []; this.startedAt = 0;
   }
   addPlayer(player) { if (this.phase !== 'lobby' || this.players.size >= this.maxPlayers) return false; this.players.set(player.id, { ...player, connected: true, input: validateInput(), x: 0, z: 0, speed: 0, lap: 0, checkpoint: -1, checkpointCount: 0, finished: false, finishTime: null, itemId: null }); return true; }
   reconnect(id, token) { const p = this.players.get(id); if (!p || p.reconnectToken !== token || Date.now() > (p.reconnectUntil || 0)) return false; p.connected = true; return true; }
@@ -42,9 +45,9 @@ export class AuthoritativeRace {
   snapshot() { return { id: this.id, phase: this.phase, tick: this.tick, track: this.track, players: [...this.players.values()].map(({ input, reconnectToken, ...p }) => p), standings: this.standings() }; }
 }
 
-export class Matchmaker { constructor() { this.queue = []; } enqueue(player) { this.queue.push({ ...player, queuedAt: Date.now() }); } match({ mode, region } = {}) { const candidates = this.queue.filter(p => (!mode || p.mode === mode) && (!region || p.region === region)); if (!candidates.length) return null; const group = candidates.splice(0, Math.min(12, candidates.length)); this.queue = this.queue.filter(p => !group.includes(p)); return group; } }
+export class Matchmaker { constructor() { this.queue = []; } enqueue(player) { this.queue.push({ ...player, queuedAt: Date.now() }); } match({ mode, region } = {}) { const candidates = this.queue.filter(p => (!mode || p.mode === mode) && (!region || p.region === region)); if (!candidates.length) return null; const group = candidates.splice(0, Math.min(MAX_PLAYERS, candidates.length)); this.queue = this.queue.filter(p => !group.includes(p)); return group; } }
 
-export class Rating { static delta(place, field = 0, consistency = 0) { return Math.round((field * 0.15) + (consistency * 0.1) + (12 - Math.min(12, place)) * 8 - 30); } static rank(rating) { return rating >= 1800 ? 'Nova Vanguard' : rating >= 1500 ? 'Skyline Ace' : rating >= 1200 ? 'Sunforge Rider' : rating >= 900 ? 'Track Scout' : 'Rookie Spark'; } }
+export class Rating { static delta(place, field = 0, consistency = 0) { return Math.round((field * 0.15) + (consistency * 0.1) + (MAX_PLAYERS - Math.min(MAX_PLAYERS, place)) * 8 - 30); } static rank(rating) { return rating >= 1800 ? 'Nova Vanguard' : rating >= 1500 ? 'Skyline Ace' : rating >= 1200 ? 'Sunforge Rider' : rating >= 900 ? 'Track Scout' : 'Rookie Spark'; } }
 
 export class ReportStore { constructor() { this.reports = []; } add(report) { const entry = { matchId: report.matchId, playerId: report.playerId, timestamp: report.timestamp || Date.now(), reason: report.reason, telemetry: report.telemetry || null }; if (!entry.matchId || !entry.playerId || !entry.reason) throw new Error('invalid report'); this.reports.push(entry); return entry; } }
 

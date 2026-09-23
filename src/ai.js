@@ -154,7 +154,9 @@ export class AIController {
 
     // --- item usage (heuristic, no raw-speed cheating) ------------------------
     this.itemCooldown -= dt;
-    if (items && this.itemCooldown <= 0) {
+    // Don't burn the cooldown pressing a button the item system will refuse
+    // (e.g. while phased, which blocks firing).
+    if (items && this.itemCooldown <= 0 && !items.hasNoItems?.(v)) {
       const heldId = items.heldItem({ vehicle: v });
       if (heldId) {
         const def = ITEMS_BY_ID[heldId];

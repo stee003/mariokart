@@ -58,18 +58,27 @@ export class CameraController {
     this._updateFov(C.fovBase, dt);
   }
 
-  update(dt, vehicle, boostActive, time) {
+  // `anchor` is the kart's INTERPOLATED render position (x, y, z, yaw). The
+  // physics pose only updates on the fixed 60 Hz step, so following it
+  // directly makes the camera - and therefore the whole world - judder
+  // whenever the display rate differs, which reads as terrain jitter.
+  // Omitting it falls back to the raw physics pose.
+  update(dt, vehicle, boostActive, time, anchor = null) {
+    const ax = anchor ? anchor.x : vehicle.pos.x;
+    const ay = anchor ? anchor.y : vehicle.y;
+    const az = anchor ? anchor.z : vehicle.pos.z;
+    const ayaw = anchor ? anchor.yaw : vehicle.yaw;
+
     // rotate behind the kart
-    const targetYaw = vehicle.yaw;
-    let diff = normalizeAngle(targetYaw - this.yaw);
+    let diff = normalizeAngle(ayaw - this.yaw);
     this.yaw += diff * Math.min(1, C.turnSmooth * dt);
 
     const back = this._back(_v1);
-    _desired.copy(vehicle.pos).addScaledVector(back, this.distance);
-    _desired.y = vehicle.y + this.height;
+    _desired.set(ax, ay, az).addScaledVector(back, this.distance);
+    _desired.y = ay + this.height;
 
     // --- collision avoidance: don't clip environment geometry ------------
-    _origin.set(vehicle.pos.x, vehicle.y + 1.4, vehicle.pos.z);
+    _origin.set(ax, ay + 1.4, az);
     _dir.copy(_desired).sub(_origin);
     const len = _dir.length();
     _dir.normalize();
@@ -108,10 +117,10 @@ export class CameraController {
     this.camera.position.copy(this.pos).add(_shake);
 
     // look ahead of the kart for stability
-    _look.set(Math.sin(vehicle.yaw), 0, Math.cos(vehicle.yaw))
-      .multiplyScalar(C.lookAhead)
-      .add(vehicle.pos);
-    _look.y = vehicle.y + 1.3;
+    _look.set(Math.sin(ayaw), 0, Math.cos(ayaw))
+      .multiplyScalar(C.lookAhead);
+    _look.x += ax; _look.z += az;
+    _look.y = ay + 1.3;
     this.camera.lookAt(_look);
     this.camera.rotation.z += shake * Math.sin(t * 2.1) * 0.03;
 

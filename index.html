@@ -28,6 +28,11 @@
         <div id="wrongway" class="hidden" role="alert"></div>
       </div>
 
+      <div id="minimap-box" class="hidden">
+        <canvas id="minimap" width="220" height="220" role="img"
+                aria-label="Track minimap"></canvas>
+      </div>
+
       <div class="hud-bottom">
         <div class="hud-left">
           <div id="item-box" class="hidden">
@@ -139,6 +144,13 @@
             <button class="btn btn-small" id="colorblind-off" data-i18n="settings.off">Off</button>
           </div>
         </div>
+        <div class="setting-row">
+          <label data-i18n="settings.minimap">Minimap</label>
+          <div class="lang-toggle">
+            <button class="btn btn-small" id="minimap-on" data-i18n="settings.on">On</button>
+            <button class="btn btn-small" id="minimap-off" data-i18n="settings.off">Off</button>
+          </div>
+        </div>
         <div class="setting-row setting-column">
           <label data-i18n="settings.keys">Key bindings</label>
           <div id="keys-list" class="keys-list"></div>
@@ -198,7 +210,22 @@
     <div id="screen-trackselect" class="screen hidden">
       <div class="menu-card wide-card">
         <h2 data-i18n="menu.selectTrack">Select Track</h2>
-        <div id="track-list" class="list-scroll"></div>
+        <div class="select-split">
+          <div id="track-list" class="list-scroll"></div>
+          <div id="track-preview" class="preview-pane">
+            <canvas id="track-preview-canvas" width="420" height="236" role="img"
+                    aria-label="Track preview"></canvas>
+            <div id="track-preview-name" class="preview-name"></div>
+            <div id="track-preview-teach" class="preview-teach"></div>
+            <div id="track-preview-stats" class="preview-stats"></div>
+            <div class="preview-legend">
+              <span class="lg lg-shortcut" data-i18n="preview.shortcut">Shortcut</span>
+              <span class="lg lg-pad" data-i18n="preview.pad">Boost pad</span>
+              <span class="lg lg-ramp" data-i18n="preview.ramp">Ramp</span>
+              <span class="lg lg-box" data-i18n="preview.box">Item box</span>
+            </div>
+          </div>
+        </div>
         <button class="btn" id="btn-tracksel-back" data-i18n="menu.back">Back</button>
       </div>
     </div>
@@ -210,6 +237,12 @@
         <div id="battle-mode-list" class="list-scroll"></div>
         <div class="battle-arena-head" data-i18n="menu.selectArena">Arena</div>
         <div id="battle-arena-list" class="list-scroll short-list"></div>
+        <div id="arena-preview" class="preview-pane preview-inline">
+          <canvas id="arena-preview-canvas" width="420" height="200" role="img"
+                  aria-label="Arena preview"></canvas>
+          <div id="arena-preview-name" class="preview-name"></div>
+          <div id="arena-preview-teach" class="preview-teach"></div>
+        </div>
         <div class="menu-buttons">
           <button class="btn btn-primary" id="btn-battle-start" data-i18n="battle.start">Start Battle</button>
           <button class="btn" id="btn-battlesel-back" data-i18n="menu.back">Back</button>

@@ -44,6 +44,8 @@ import { recordStats, checkAchievements, trackPlayed } from './achievements.js';
 import { LocalLeaderboard } from './leaderboard.js';
 import { LocalProvider } from './online.js';
 import { buildLoadout } from './content/loadout.js';
+import { rosterFor } from './content/roster.js';
+import { drawPreviewInto, trackPreviewStats } from './trackPreview.js';
 import { CHARACTERS } from './content/characters.js';
 import { CHASSIS } from './content/chassis.js';
 import { WHEELS } from './content/wheels.js';
@@ -154,14 +156,16 @@ class Game {
       this.camCtl.fovScale = reduceFx ? 0.3 : 1;
     }
     this.driftPalette = driftColors(colorblind);
+    this.hud.setMinimapEnabled(this.save.get('minimap', true));
+    this.hud.showMinimap(this.appState === 'race');
   }
 
   // --------------------------------------------------------------- world load
   // (Re)builds track + environment + items + karts for a track definition id.
   // The vehicle physics, drift, camera and race systems are reused untouched;
   // only world content swaps. `solo` registers only the player (time trials);
-  // `rivals` (0-3) trims the AI grid for custom quick races.
-  _loadTrack(trackId, first = false, { solo = false, rivals = 3 } = {}) {
+  // `rivals` (0..maxPlayers-1) trims the AI grid for custom quick races.
+  _loadTrack(trackId, first = false, { solo = false, rivals = CONFIG.race.maxPlayers - 1 } = {}) {
     const def = TRACK_DEFS.find((d) => d.id === trackId) || getArena(trackId);
     this.trackId = def.id;
     if (TRACK_DEFS.some((d) => d.id === def.id)) this.save.set('lastTrack', def.id);
@@ -222,11 +226,9 @@ class Game {
     // and drift tuning); AI rivals use their fixed personalities.
     this.loadout = buildLoadout(this.save.get('loadout', {}));
     this.kartVisuals = new Map();
-    const roster = [
-      { nameKey: 'ai.cinder',  color: 0xd9452f, accent: 0xffd23f, pilot: 0x53302a, ai: 'aggressive' },
-      { nameKey: 'ai.zephyr',  color: 0x2fa877, accent: 0xd8f4e6, pilot: 0x3c5c4e, ai: 'balanced' },
-      { nameKey: 'ai.bastion', color: 0x4159c9, accent: 0x9fb4ff, pilot: 0x37406e, ai: 'defensive' },
-    ].slice(0, solo ? 0 : Math.max(0, Math.min(3, rivals)));
+    const maxRivals = CONFIG.race.maxPlayers - 1;
+    const roster = rosterFor(CONFIG.race.maxPlayers)
+      .slice(0, solo ? 0 : Math.max(0, Math.min(maxRivals, rivals)));
     roster.push({
       nameKey: 'ai.you',
       color: this.loadout.visual.bodyColor,
@@ -254,6 +256,7 @@ class Game {
         nameKey: d.nameKey,
         isPlayer: d.ai === null,
         charVis: vis.charVis || null,
+        minimapColor: d.color,      // blip colour matches the kart's paint
       };
       if (kart.ai) kart.ai.setDifficulty(this.save.get('difficulty', 'normal'));
       this.race.registerKart(kart);
@@ -263,16 +266,21 @@ class Game {
     // place karts on the grid for the menu backdrop
     this._placeOnGrid();
 
+    // bake the minimap overview for this world
+    this.hud.setMinimapTrack(this.track);
+
     trackPlayed(this.save, def.id);
     this.music.setTheme(def.musicSeed, def.theme);
   }
 
-  // AI takes the front slots; the player always starts from the back slot.
+  // AI takes the front slots; the player always starts from the back slot
+  // of the grid actually in use (so a trimmed rival count still lines up).
   _placeOnGrid() {
-    const grid = this.track.startGrid();
+    const n = this.race.karts.length;
+    const grid = this.track.startGrid(n);
     const ais = this.race.karts.filter((k) => !k.isPlayer);
     ais.forEach((k, i) => k.vehicle.place(grid[i]));
-    this.playerKart.vehicle.place(grid[3]);
+    this.playerKart.vehicle.place(grid[n - 1]);
   }
 
   _removeGhostVis() {
@@ -393,8 +401,8 @@ class Game {
       () => this.save.get('quickLaps', 3),
       (v) => this.save.set('quickLaps', v));
     this._buildOptionGroup('rivals-list',
-      [0, 1, 2, 3].map((n) => ({ value: n, label: String(n) })),
-      () => this.save.get('quickRivals', 3),
+      Array.from({ length: CONFIG.race.maxPlayers }, (_, n) => ({ value: n, label: String(n) })),
+      () => this._quickRivals(),
       (v) => this.save.set('quickRivals', v));
 
     // garage
@@ -402,9 +410,9 @@ class Game {
     click('btn-garage-back', () => { this.hud.showScreen('screen-main'); });
 
     // accessibility toggles -------------------------------------------------
-    const syncToggle = (key, onId, offId, onChange) => {
+    const syncToggle = (key, onId, offId, onChange, dflt = false) => {
       const sync = () => {
-        const on = this.save.get(key, false);
+        const on = this.save.get(key, dflt);
         $(onId).classList.toggle('selected', on);
         $(offId).classList.toggle('selected', !on);
       };
@@ -414,6 +422,8 @@ class Game {
     };
     syncToggle('reducedFx', 'reducefx-on', 'reducefx-off', () => this._applyA11y());
     syncToggle('colorblind', 'colorblind-on', 'colorblind-off', () => this._applyA11y());
+    // minimap defaults ON: it is a navigation aid, not an effect
+    syncToggle('minimap', 'minimap-on', 'minimap-off', () => this._applyA11y(), true);
 
     this._buildOptionGroup('uiscale-list',
       [{ value: 100, labelKey: 'settings.size.normal' },
@@ -514,6 +524,16 @@ class Game {
 
   _refreshOptionGroups() {
     for (const sync of this._optionGroups || []) sync();
+  }
+
+  // Saved rival count, clamped to the current lobby capacity. Defaults to a
+  // full grid so existing saves (written when the cap was 4) still fill the
+  // new 8-kart lobby rather than silently racing three rivals forever.
+  _quickRivals() {
+    const max = CONFIG.race.maxPlayers - 1;
+    const saved = this.save.get('quickRivals', null);
+    if (saved === null || saved === undefined) return max;
+    return Math.max(0, Math.min(max, saved));
   }
 
   openSettings() { this.hud.showScreen('screen-settings'); }
@@ -672,6 +692,7 @@ class Game {
   _renderTrackList() {
     const list = document.getElementById('track-list');
     list.innerHTML = '';
+    const rows = [];
     for (const def of TRACK_DEFS) {
       const btn = document.createElement('button');
       btn.className = 'btn list-row';
@@ -684,11 +705,57 @@ class Game {
         ? (rec?.bestTotal ? formatTime(rec.bestTotal) : this.i18n.t('tt.noRecord'))
         : this.i18n.t(def.teachKey);
       btn.append(name, meta);
+
+      // Preview before committing: hovering or focusing a row shows that
+      // track's map, so the player can compare circuits without starting a
+      // race. Clicking still starts it.
+      const preview = () => {
+        for (const r of rows) r.classList.toggle('active', r === btn);
+        this._showTrackPreview(def);
+      };
+      btn.addEventListener('mouseenter', preview);
+      btn.addEventListener('focus', preview);
       btn.addEventListener('click', () => {
         this.audio.click();
         this._startModeOnTrack(this._trackSelectMode, def.id);
       });
+      rows.push(btn);
       list.appendChild(btn);
+    }
+
+    // open on the last track played (or the first) so the pane is never blank
+    const lastId = this.save.get('lastTrack', null);
+    const idx = Math.max(0, TRACK_DEFS.findIndex((d) => d.id === lastId));
+    rows[idx]?.classList.add('active');
+    this._showTrackPreview(TRACK_DEFS[idx]);
+  }
+
+  // Paint the preview pane for a track definition.
+  _showTrackPreview(def) {
+    if (!def) return;
+    const canvas = document.getElementById('track-preview-canvas');
+    const nameEl = document.getElementById('track-preview-name');
+    const teachEl = document.getElementById('track-preview-teach');
+    const statsEl = document.getElementById('track-preview-stats');
+    if (canvas) drawPreviewInto(canvas, def);
+    if (nameEl) nameEl.textContent = this.i18n.t(def.nameKey);
+    if (teachEl) teachEl.textContent = this.i18n.t(def.teachKey);
+    if (!statsEl) return;
+
+    // A few at-a-glance facts pulled from the real definition.
+    const stats = trackPreviewStats(def);
+    const rec = this.records.get(def.id);
+    const parts = [
+      this.i18n.t('preview.length', { km: (stats.length / 1000).toFixed(2) }),
+      this.i18n.t('preview.laps', { laps: stats.laps }),
+      this.i18n.t('preview.difficulty', { stars: '★'.repeat(stats.difficulty) + '☆'.repeat(Math.max(0, 5 - stats.difficulty)) }),
+    ];
+    if (rec?.bestTotal) parts.push(this.i18n.t('preview.record', { time: formatTime(rec.bestTotal) }));
+    statsEl.innerHTML = '';
+    for (const text of parts) {
+      const span = document.createElement('span');
+      span.textContent = text;
+      statsEl.appendChild(span);
     }
   }
 
@@ -720,7 +787,7 @@ class Game {
 
   _startModeOnTrack(mode, trackId) {
     this.mode = mode;
-    const rivals = mode === 'quick' ? this.save.get('quickRivals', 3) : 3;
+    const rivals = mode === 'quick' ? this._quickRivals() : CONFIG.race.maxPlayers - 1;
     this._loadTrack(trackId, false, { solo: mode === 'timetrial', rivals });
     if (mode === 'timetrial') {
       const ghost = this.records.ghostFor(trackId);
@@ -771,6 +838,9 @@ class Game {
       meta.className = 'list-meta';
       meta.textContent = this.i18n.t(a.teachKey);
       btn.append(name, meta);
+      const preview = () => this._showArenaPreview(a);
+      btn.addEventListener('mouseenter', preview);
+      btn.addEventListener('focus', preview);
       btn.addEventListener('click', () => {
         this.audio.click();
         this._battleArenaId = a.id;
@@ -778,11 +848,23 @@ class Game {
       });
       arenaList.appendChild(btn);
     }
+    this._showArenaPreview(ARENAS.find((a) => a.id === this._battleArenaId) || ARENAS[0]);
+  }
+
+  // Preview pane for the battle arena picker (same renderer as tracks).
+  _showArenaPreview(def) {
+    if (!def) return;
+    const canvas = document.getElementById('arena-preview-canvas');
+    const nameEl = document.getElementById('arena-preview-name');
+    const teachEl = document.getElementById('arena-preview-teach');
+    if (canvas) drawPreviewInto(canvas, def);
+    if (nameEl) nameEl.textContent = this.i18n.t(def.nameKey);
+    if (teachEl) teachEl.textContent = this.i18n.t(def.teachKey);
   }
 
   _startBattle() {
     this.mode = 'battle';
-    this._loadTrack(this._battleArenaId, false, { rivals: 3 });
+    this._loadTrack(this._battleArenaId, false, { rivals: CONFIG.race.maxPlayers - 1 });
     this.startBattle();
   }
 
@@ -834,6 +916,11 @@ class Game {
       line += ` · ${this.i18n.t('battle.hp')} ${info.hp}`;
     }
     el.textContent = line;
+
+    // Battle mode never calls hud.updateRace(), so the minimap is driven
+    // here instead. Eliminated karts drop off the map.
+    const live = this.race.karts.filter((k) => !b.per.get(k)?.eliminated);
+    this.hud.drawMinimap(live, this.playerKart, this.items);
   }
 
   _battleStep(dt) {
@@ -917,7 +1004,7 @@ class Game {
       div.className = 'result-row' + (row.kart.isPlayer ? ' you' : '');
       const pos = document.createElement('span');
       pos.className = 'result-pos';
-      pos.textContent = row.eliminated ? 'KO' : i18n.t('ordinal.' + Math.min(4, idx + 1));
+      pos.textContent = row.eliminated ? 'KO' : i18n.t('ordinal.' + Math.min(CONFIG.race.maxPlayers, idx + 1));
       const name = document.createElement('span');
       name.className = 'result-name';
       name.textContent = i18n.t(row.kart.nameKey);
@@ -1439,9 +1526,13 @@ class Game {
           steps++;
         }
         if (steps === 4) this.accumulator = 0;
+        // Fraction of the way into the next physics step; karts render
+        // between their previous and current pose so motion stays smooth
+        // even when the display rate is not a multiple of 60 Hz.
+        const alpha = this.accumulator / FIXED_DT;
 
         for (const kart of this.race.karts) {
-          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time);
+          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time, alpha);
           if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
         }
         this.perFrameFX(rawDt);
@@ -1457,7 +1548,8 @@ class Game {
         } else {
           this.audio.updateEngine(0, 0, false);
         }
-        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time);
+        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time,
+          this.kartVisuals.get(pv)?.renderPose || null);
         this._updateBattleHud();
 
         if (this.battle.state === 'over' && !this._battleResultsShown) {
@@ -1499,10 +1591,11 @@ class Game {
           steps++;
         }
         if (steps === 4) this.accumulator = 0;
+        const alpha = this.accumulator / FIXED_DT;
 
         // visuals
         for (const kart of this.race.karts) {
-          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time);
+          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time, alpha);
           if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
         }
         this.perFrameFX(rawDt);
@@ -1536,7 +1629,8 @@ class Game {
           this.audio.updateEngine(0, 0, false);
         }
 
-        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time);
+        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time,
+          this.kartVisuals.get(pv)?.renderPose || null);
       }
 
       // results transition hook (once per race)
