@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Sunforge Racers - original arcade kart racing vertical slice",
   "scripts": {
-    "start": "python3 -m http.server 8000 --bind 0.0.0.0",
-    "test": "node test/logic.test.mjs"
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "test": "node test/logic.test.mjs && node test/server.test.mjs",
+    "test:all": "node test/logic.test.mjs && node test/server.test.mjs && node test/race_sim.test.mjs && node test/boot_smoke.mjs"
   }
 }
