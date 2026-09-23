@@ -164,6 +164,9 @@ export class TrackManager {
     this.slider = null;
     for (const o of def.obstacles || []) {
       const at = this.pointAt(o.s * L);
+      // Opt-in for the expedition tracks. Older obstacle placement is unchanged;
+      // gear already applies its own lane offset below.
+      if (def.obstacleLaneOffsets && o.type !== 'gear') at.pos.addScaledVector(at.right, o.lat ?? 0);
       if (o.type === 'gear') {
         const center = at.pos.clone().addScaledVector(at.right, o.lat ?? 0);
         center.y = at.pos.y;

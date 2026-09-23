@@ -65,6 +65,8 @@ export function buildTheme(musicSeed, theme) {
 //   leadType, bassType     - oscillator waveforms
 //   drive                  - 0..1.2 master energy (drums + layer loudness)
 //   arp                    - weave 8th-note chord arpeggio between lead notes
+//   loopSteps, voice       - opt-in extended phrases and softened instrument/echo
+//                            profile for the three expedition tracks (64 steps)
 //
 // Everything is deterministic: a track always plays the same arrangement.
 // Tracks WITHOUT a rich spec keep going through buildTheme() unchanged.
@@ -72,6 +74,8 @@ export function buildTheme(musicSeed, theme) {
 function buildRichTheme(spec) {
   return {
     rich: true,
+    loopSteps: spec.loopSteps || 16, // legacy playback stays unchanged
+    voice: spec.voice || null,
     theme: spec.theme,
     mode: spec.mode,
     root: spec.root,
@@ -126,9 +130,11 @@ export class MusicManager {
   // `richSpec` (def.music) opts the track into the hand-arranged engine;
   // without it the seeded generator is used, exactly as before.
   setTheme(musicSeed, theme, richSpec = null) {
+    const resetPhrase = this.theme.loopSteps > 16 || richSpec?.loopSteps;
     this.theme = richSpec
       ? buildRichTheme({ ...richSpec, theme })
       : buildTheme(musicSeed, theme);
+    if (resetPhrase) this._step = 0;
   }
 
   setState(state) {
@@ -165,7 +171,7 @@ export class MusicManager {
     while (this._nextNoteTime < this.ctx.currentTime + 0.22) {
       this._playStep(this._step, this._nextNoteTime, spb);
       this._nextNoteTime += spb;
-      this._step = (this._step + 1) % 16;
+      this._step = (this._step + 1) % (this.theme.loopSteps || 16);
     }
   }
 
@@ -174,9 +180,15 @@ export class MusicManager {
     o.type = type; o.frequency.value = f;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(peak, t + 0.012);
+    g.gain.linearRampToValueAtTime(peak, t + (this.theme.voice?.attack || 0.012));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g); g.connect(dest || this.master);
+    if (this.theme.voice) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass'; filter.frequency.value = this.theme.voice.cutoff;
+      filter.Q.value = 0.45;
+      o.connect(filter); filter.connect(g);
+    } else o.connect(g);
+    g.connect(dest || this.master);
     o.start(t); o.stop(t + dur + 0.05);
   }
 
@@ -243,7 +255,7 @@ export class MusicManager {
     const calm = s === 'menu' || s === 'victory' || s === 'defeat' || s === 'countdown';
     const drive = (s === 'countdown') ? th.drive * 0.55
       : calm ? 0.38 : th.drive;
-    const bar = Math.floor(step / 8) % 4;
+    const bar = Math.floor(step / 8) % th.chords.length;
     const chord = th.chords[bar] || [0, 2, 4];
     const freq = (base, d) => base * Math.pow(2, this._scaleSemis(d) / 12);
 
@@ -291,6 +303,9 @@ export class MusicManager {
         const f = freq(th.root * 2, ld);
         const gain = (calm || s === 'countdown') ? 0.035 : 0.05;
         this._tone(f, t, spb * (s === 'finalLap' ? 1.5 : 1.05), th.leadType, gain * (s === 'countdown' ? 0.6 : 1));
+        if (th.voice?.echo && racing) {
+          this._tone(f, t + spb * 1.5, spb * 1.4, 'sine', gain * th.voice.echo);
+        }
         if (s === 'finalLap') this._tone(f * 2, t, spb * 0.8, 'triangle', 0.018);
       }
     }

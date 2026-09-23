@@ -1,3 +1,5 @@
+import { EXPEDITION_MUSIC } from './expeditionMusic.js';
+
 // ============================================================================
 // Track definitions - pure data. TrackManager (src/track.js) builds any of
 // these; with no argument it builds SUNFORGE_DEF exactly as the original
@@ -342,37 +344,41 @@ export const TRACK_DEFS = [
     id: 'granite_pass', nameKey: 'track.granite', theme: 'mountain',
     teachKey: 'track.granite.teach', mechanicKey: 'track.granite.mechanic',
     musicSeed: 53, laps: 3, difficulty: 3,
+    obstacleLaneOffsets: true,
+    music: EXPEDITION_MUSIC.granite_pass,
+    // Wider shoulders and deliberate hazard/recovery spacing; retain track identity.
     points: [
-      { x: -220, y: 0,  z: -100, w: 18 },
-      { x: -80,  y: 2,  z: -150, w: 16 },
-      { x: 60,   y: 7,  z: -165, w: 14 },
-      { x: 185,  y: 13, z: -115, w: 12.5 },
-      { x: 225,  y: 19, z: -15,  w: 12 },
-      { x: 140,  y: 25, z: 65,   w: 12 },
-      { x: 20,   y: 29, z: 20,   w: 11.5 },   // hairpin lookout
-      { x: -65,  y: 33, z: 85,   w: 12 },
-      { x: -165, y: 31, z: 145,  w: 12.5 },
-      { x: -235, y: 23, z: 95,   w: 13.5 },
-      { x: -245, y: 13, z: -5,   w: 14.5 },
-      { x: -265, y: 5,  z: -70,  w: 16 },
+      { x: -220, y: 0,  z: -100, w: 20 },
+      { x: -80,  y: 2,  z: -150, w: 18 },
+      { x: 60,   y: 7,  z: -165, w: 16 },
+      { x: 185,  y: 13, z: -115, w: 14.5 },
+      { x: 225,  y: 19, z: -15,  w: 14 },
+      { x: 140,  y: 25, z: 65,   w: 14 },
+      { x: 20,   y: 29, z: 35,   w: 13.5 },   // hairpin lookout
+      { x: -70,  y: 32, z: 100,   w: 14 },
+      { x: -165, y: 31, z: 145,  w: 14.5 },
+      { x: -235, y: 23, z: 95,   w: 15.5 },
+      { x: -245, y: 13, z: -5,   w: 16.5 },
+      { x: -265, y: 5,  z: -70,  w: 18 },
     ],
     ramps: [
-      { f: 0.045, len: 10, lat: 0, halfW: 3.6, rise: 1.8 },
-      { f: 0.60, len: 8, lat: 0, halfW: 3.2, rise: 1.6 },
+      { f: 0.045, len: 10, lat: 0, halfW: 4.0, rise: 1.6 },
+      { f: 0.72, len: 12, lat: -2, halfW: 3.8, rise: 1.5 },
     ],
     pads: [
-      { f: 0.13, lat: 0, halfW: 2.3, len: 4.5 },
-      { f: 0.87, lat: 0, halfW: 2.5, len: 5 },
+      { f: 0.13, lat: 0, halfW: 2.8, len: 6 },
+      { f: 0.62, lat: 0, halfW: 2.6, len: 5 },
+      { f: 0.84, lat: 0, halfW: 2.8, len: 6 },
     ],
     checkpoints: [0, 0.10, 0.22, 0.34, 0.46, 0.58, 0.70, 0.82, 0.92, 0.965],
     cpExtras: { 0: 6 },
     obstacles: [
-      { type: 'pendulum', s: 0.50, lat: 0, swing: 5.0, speed: 1.0, radius: 1.3 },
-      { type: 'flamejet', s: 0.94, lat: 0, period: 3.2, duty: 0.35, radius: 2.6 },
+      { type: 'pendulum', s: 0.47, lat: -1.5, swing: 4.2, speed: 1.0, radius: 1.3 },
+      { type: 'flamejet', s: 0.93, lat: 2.8, period: 3.2, duty: 0.35, radius: 2.6 },
     ],
     zones: [],
-    boxes: [0.06, 0.28, 0.52, 0.75, 0.90],
-    ranges: { canyon: [0.40, 0.62] },
+    boxes: [0.075, 0.28, 0.54, 0.78, 0.89],
+    ranges: { canyon: [0.31, 0.40] },
   },
 
   // ------------------------------------------------------------------ volcano
@@ -380,30 +386,38 @@ export const TRACK_DEFS = [
     id: 'magma_coil', nameKey: 'track.magma', theme: 'volcano',
     teachKey: 'track.magma.teach', mechanicKey: 'track.magma.mechanic',
     musicSeed: 61, laps: 3, difficulty: 5,
+    obstacleLaneOffsets: true,
+    music: EXPEDITION_MUSIC.magma_coil,
+    // Wider shoulders and deliberate hazard/recovery spacing; retain track identity.
     points: [
-      { x: -150, y: 0, z: -110, w: 17 },
-      { x: 10,  y: 1, z: -145, w: 15 },
-      { x: 140, y: 3, z: -95, w: 12.5 },
-      { x: 175, y: 5, z: 15,  w: 11.5 },
-      { x: 110, y: 6, z: 110, w: 11 },
-      { x: 0,   y: 5, z: 140, w: 11 },
-      { x: -105, y: 4, z: 105, w: 11 },
-      { x: -150, y: 3, z: 15,  w: 11 },
-      { x: -90,  y: 2, z: -55, w: 12 },     // inner coil
-      { x: 10,   y: 2, z: -30, w: 12.5 },
+      { x: -165, y: 0, z: -165, w: 19 },
+      { x: 10,  y: 1, z: -160, w: 17 },
+      { x: 140, y: 3, z: -95, w: 14.5 },
+      { x: 175, y: 5, z: 15,  w: 13.5 },
+      { x: 110, y: 6, z: 110, w: 13 },
+      { x: 0,   y: 5, z: 140, w: 13 },
+      { x: -105, y: 4, z: 105, w: 13 },
+      { x: -150, y: 3, z: 15,  w: 13 },
+      { x: -90,  y: 2, z: -55, w: 14 },     // inner coil
+      { x: 12,   y: 2, z: -24, w: 14.5 },
+      { x: 46,   y: 2, z: -53, w: 14.5 },
+      { x: 12,   y: 1, z: -86, w: 15 },
+      { x: -55, y: 1, z: -94, w: 15 }, // recovery bend out of the inner coil
+      { x: -145, y: 0, z: -80, w: 16 },
+      { x: -205, y: 0, z: -115, w: 18 },
     ],
-    ramps: [{ f: 0.30, len: 9, lat: 0, halfW: 3.2, rise: 1.9 }],
+    ramps: [{ f: 0.32, len: 12, lat: -1.5, halfW: 3.8, rise: 1.6 }],
     pads: [
-      { f: 0.10, lat: 0, halfW: 2.3, len: 4.5 },
-      { f: 0.55, lat: 0, halfW: 2.3, len: 4.5 },
-      { f: 0.90, lat: 0, halfW: 2.4, len: 4.5 },
+      { f: 0.10, lat: 0, halfW: 2.7, len: 5.5 },
+      { f: 0.55, lat: 0, halfW: 2.7, len: 5.5 },
+      { f: 0.87, lat: 0, halfW: 2.8, len: 5.5 },
     ],
     checkpoints: [0, 0.12, 0.26, 0.40, 0.54, 0.68, 0.82, 0.93],
     cpExtras: { 0: 6 },
     obstacles: [
-      { type: 'flamejet', s: 0.22, lat: 0, period: 2.6, duty: 0.4, radius: 2.4 },
-      { type: 'flamejet', s: 0.62, lat: 0, period: 2.9, duty: 0.4, radius: 2.4 },
-      { type: 'gear', s: 0.86, lat: 1.2, armRadius: 4.6, speed: 1.1 },
+      { type: 'flamejet', s: 0.22, lat: 2.4, period: 2.6, duty: 0.34, radius: 2.4 },
+      { type: 'flamejet', s: 0.62, lat: -2.4, period: 2.9, duty: 0.34, radius: 2.4 },
+      { type: 'gear', s: 0.71, lat: 2.8, armRadius: 3.6, speed: 0.95 },
     ],
     zones: [],
     boxes: [0.05, 0.33, 0.58, 0.80],
@@ -415,19 +429,23 @@ export const TRACK_DEFS = [
     id: 'abyss_dock', nameKey: 'track.abyss', theme: 'underwater',
     teachKey: 'track.abyss.teach', mechanicKey: 'track.abyss.mechanic',
     musicSeed: 71, laps: 3, difficulty: 2,
+    obstacleLaneOffsets: true,
+    music: EXPEDITION_MUSIC.abyss_dock,
+    // Wider shoulders and deliberate hazard/recovery spacing; retain track identity.
     points: [
-      { x: -190, y: 0, z: -120, w: 22 },
-      { x: 20,  y: 0, z: -140, w: 20 },
-      { x: 180, y: -2, z: -90, w: 16 },
-      { x: 220, y: -4, z: 40,  w: 14 },
-      { x: 120, y: -5, z: 130, w: 14 },
-      { x: -20, y: -4, z: 90,  w: 14 },
-      { x: -90, y: -3, z: 160, w: 15 },
-      { x: -220, y: -2, z: 120, w: 15 },
-      { x: -260, y: 0, z: 0,   w: 17 },
+      { x: -190, y: 0, z: -120, w: 24 },
+      { x: 20,  y: 0, z: -140, w: 22 },
+      { x: 180, y: -2, z: -90, w: 18 },
+      { x: 220, y: -4, z: 40,  w: 16 },
+      { x: 120, y: -5, z: 130, w: 16 },
+      { x: -15, y: -4, z: 105,  w: 16 },
+      { x: -95, y: -3, z: 155, w: 17 },
+      { x: -220, y: -2, z: 120, w: 17 },
+      { x: -260, y: 0, z: 0,   w: 19 },
     ],
-    shortcut: { entry: 0.36, exit: 0.48, latEntry: 2.5, latExit: 2.8, halfW: 3.4 },
-    ramps: [{ f: 0.66, len: 10, lat: 0, halfW: 3.8, rise: 1.6 }],
+    shortcut: { entry: 0.36, exit: 0.48, latEntry: 2.5, latExit: 2.8, halfW: 4.0 },
+    shortcutPads: [0.45],
+    ramps: [{ f: 0.69, len: 13, lat: 0, halfW: 4.2, rise: 1.4 }],
     pads: [
       { f: 0.10, lat: 3, halfW: 2.4, len: 5 },
       { f: 0.10, lat: -3, halfW: 2.4, len: 5 },
@@ -436,12 +454,12 @@ export const TRACK_DEFS = [
     ],
     checkpoints: [0, 0.11, 0.25, 0.39, 0.52, 0.64, 0.77, 0.90, 0.96],
     cpExtras: { 0: 6, 4: 12 },
-    obstacles: [{ type: 'slider', s: 0.30, ampExtra: 0.7, speed: 1.9, radius: 1.5 }],
+    obstacles: [{ type: 'slider', s: 0.34, ampExtra: 0.5, speed: 1.55, radius: 1.5 }],
     zones: [
-      { f0: 0.52, f1: 0.66, type: 'current', v: 3.5 },   // water jet pushes forward
-      { f0: 0.18, f1: 0.30, type: 'lowgrav', v: 0.55 },  // buoyancy chamber
+      { f0: 0.52, f1: 0.66, type: 'current', v: 3.0 },   // water jet pushes forward
+      { f0: 0.18, f1: 0.28, type: 'lowgrav', v: 0.55 },  // buoyancy chamber
     ],
-    boxes: [0.06, 0.24, 0.44, 0.68, 0.86],
+    boxes: [0.06, 0.16, 0.48, 0.74, 0.86],
     ranges: { tunnel: [0.40, 0.47] },
   },
 
