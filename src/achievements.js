@@ -12,6 +12,7 @@ const STAT_DEFAULTS = {
   cups: 0, cupsGold: 0, cupsPlatinum: 0,
   itemsTaken: 0, itemsUsed: 0,
   ghostsRaced: 0, tracksPlayed: 0,
+  battles: 0, battleWins: 0,
 };
 
 export function getStats(save) {

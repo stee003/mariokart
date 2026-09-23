@@ -303,3 +303,12 @@ input[type="range"]::-moz-range-thumb {
   display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
 }
 .opt-toggle .btn-small { min-width: 44px; }
+
+/* ---------------- battle ---------------- */
+.chip-battle { font-weight: 800; letter-spacing: 1px; color: #ffdff0; border-color: rgba(255, 120, 200, 0.5); }
+.battle-arena-head {
+  font-size: 14px; letter-spacing: 3px; text-transform: uppercase;
+  color: #d8a878; margin: 4px 0 8px;
+}
+.list-scroll.short-list { max-height: 22vh; flex-direction: row; flex-wrap: wrap; }
+.list-scroll.short-list .list-row { width: 48%; }

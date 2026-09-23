@@ -383,7 +383,7 @@ export class ItemSystem {
             Math.abs(v.y - box.pos.y) < 2.5) {
           this.grantBox(kart);
           box.respawnT = 6.5;
-          this.onEvent?.('boxPickup', { pos: box.pos });
+          this.onEvent?.('boxPickup', { pos: box.pos, kart });
           break;
         }
       }

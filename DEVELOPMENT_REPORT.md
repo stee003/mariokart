@@ -226,3 +226,33 @@ incrementally around it, each increment tested before the next begins.
   setting. Time trials race solo with items off.
 - Tests: 40 mode tests + boot smoke now simulates a full 4-race cup and a
   solo time trial with ghost capture/replay.
+
+## Increment 5a — Systems (commit 4c7aaa1)
+
+- `src/aiDifficulty.js` — six AI tiers (Beginner → Master) that scale
+  *decision quality only*: mistake rate, braking lookahead, corner-entry
+  judgement (can only ever brake earlier, never go faster), drift/boost
+  skill, item-use skill, rocket starts. No tier touches top speed.
+- `src/progression.js` — XP curve, levels, level-based unlocks derived from
+  content declarations (no pay-to-win). `src/achievements.js` — 16
+  achievements over persistent stat counters.
+- `src/leaderboard.js` — per-track local top-10. `src/online.js` — provider
+  contract with LocalProvider (offline default) and HttpProvider (REST
+  contract + ranked seasons), ready for a backend.
+- Custom quick races (laps / rivals / difficulty in Settings), XP/level/
+  unlock/achievement toasts, leaderboard submissions, stat tracking.
+
+## Increment 5b — Battle arenas (this commit)
+
+- `src/content/arenas.js` — 4 arenas (Ember Forge, Cryo Hall, Neon Plaza,
+  Sky Atoll) built as wide disc-shaped loops through the untouched track
+  pipeline and themed renderer, with arena walls, obstacles, item boxes and
+  a low-gravity arena.
+- `src/battle.js` — BattleManager with five original modes: Energy Rush
+  (collect cores), Elimination (HP, last standing), Zone Control (capture
+  rings), Survival (HP decays), Score Battle (hit/KO points).
+- `src/main.js` — battle mode select (mode + arena), fixed-step battle
+  loop (vehicles, AI, items, obstacle damage), battle HUD chip, KO/capture
+  notifications, battle results with progression awards.
+- Tests: 27 battle-logic checks + 29 arena checks (build, drivability,
+  containment, real-geometry zones).

@@ -19,7 +19,9 @@ import { MusicManager } from './music.js';
 import { TrackManager } from './track.js';
 import { buildEnvironment } from './environment.js';
 import { buildThemedEnvironment } from './environment2.js';
-import { getTrackDef, TRACK_DEFS } from './content/trackDefs.js';
+import { TRACK_DEFS } from './content/trackDefs.js';
+import { ARENAS, getArena, enforceArenaWalls } from './content/arenas.js';
+import { BATTLE_MODES, BattleManager } from './battle.js';
 import { buildKart, updateKartVisual } from './kartMesh.js';
 import { animateCharacter } from './characterMesh.js';
 import { VehicleController } from './vehicle.js';
@@ -64,6 +66,8 @@ class Game {
     this.ghostPlayer = null;
     this.ghostVis = null;
     this._lastRaceState = 'idle';
+    this.battle = null;
+    this._battleInput = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false, item: false };
 
     // renderer ---------------------------------------------------------------
     const canvas = document.getElementById('game');
@@ -99,9 +103,9 @@ class Game {
   // only world content swaps. `solo` registers only the player (time trials);
   // `rivals` (0-3) trims the AI grid for custom quick races.
   _loadTrack(trackId, first = false, { solo = false, rivals = 3 } = {}) {
-    const def = getTrackDef(trackId);
+    const def = TRACK_DEFS.find((d) => d.id === trackId) || getArena(trackId);
     this.trackId = def.id;
-    this.save.set('lastTrack', def.id);
+    if (TRACK_DEFS.some((d) => d.id === def.id)) this.save.set('lastTrack', def.id);
 
     // dispose previous world (environment group + kart meshes)
     if (this.env) this.scene.remove(this.env.group);
@@ -242,9 +246,12 @@ class Game {
     click('btn-mode-quick', () => this.openTrackSelect('quick'));
     click('btn-mode-gp', () => this.openCupSelect());
     click('btn-mode-tt', () => this.openTrackSelect('timetrial'));
+    click('btn-mode-battle', () => this.openBattleSelect());
     click('btn-mode-back', () => this.hud.showScreen('screen-main'));
     click('btn-tracksel-back', () => this.openModeSelect());
     click('btn-cupsel-back', () => this.openModeSelect());
+    click('btn-battlesel-back', () => this.openModeSelect());
+    click('btn-battle-start', () => this._startBattle());
 
     // language
     const syncLang = () => {
@@ -442,6 +449,213 @@ class Game {
     this.startRace();
   }
 
+  // ------------------------------------------------------------------ battle
+  openBattleSelect() {
+    if (!this._battleModeId) this._battleModeId = BATTLE_MODES[0].id;
+    if (!this._battleArenaId) this._battleArenaId = ARENAS[0].id;
+    this._renderBattleLists();
+    this.hud.showScreen('screen-battleselect');
+  }
+
+  _renderBattleLists() {
+    const modeList = document.getElementById('battle-mode-list');
+    modeList.innerHTML = '';
+    for (const m of BATTLE_MODES) {
+      const btn = document.createElement('button');
+      btn.className = 'btn list-row' + (m.id === this._battleModeId ? ' selected' : '');
+      const name = document.createElement('span');
+      name.textContent = this.i18n.t(m.nameKey);
+      const meta = document.createElement('span');
+      meta.className = 'list-meta';
+      meta.textContent = this.i18n.t(m.descKey);
+      btn.append(name, meta);
+      btn.addEventListener('click', () => {
+        this.audio.click();
+        this._battleModeId = m.id;
+        this._renderBattleLists();
+      });
+      modeList.appendChild(btn);
+    }
+    const arenaList = document.getElementById('battle-arena-list');
+    arenaList.innerHTML = '';
+    for (const a of ARENAS) {
+      const btn = document.createElement('button');
+      btn.className = 'btn list-row' + (a.id === this._battleArenaId ? ' selected' : '');
+      const name = document.createElement('span');
+      name.textContent = this.i18n.t(a.nameKey);
+      const meta = document.createElement('span');
+      meta.className = 'list-meta';
+      meta.textContent = this.i18n.t(a.teachKey);
+      btn.append(name, meta);
+      btn.addEventListener('click', () => {
+        this.audio.click();
+        this._battleArenaId = a.id;
+        this._renderBattleLists();
+      });
+      arenaList.appendChild(btn);
+    }
+  }
+
+  _startBattle() {
+    this.mode = 'battle';
+    this._loadTrack(this._battleArenaId, false, { rivals: 3 });
+    this.startBattle();
+  }
+
+  startBattle() {
+    this.appState = 'race';
+    this.hud.hideScreens();
+    this.hud.showHUD(true);
+    this.audio.resume();
+    this.music.resume();
+
+    this.battle = new BattleManager({
+      track: this.track,
+      modeId: this._battleModeId,
+      karts: this.race.karts,
+      onEvent: (type, payload) => this.onRaceEvent(type, payload),
+    });
+    this._battleOverT = 0;
+    this._bLastCount = 99;
+    this._battleResultsShown = false;
+    this.race.itemsEnabled = true;
+    this.items.reset();
+    this.items.setBoxes(this.track.itemBoxes);
+    this.itemVisuals.setBoxes(this.items.boxes);
+    for (const m of this.itemVisuals.boxMeshes) m.visible = true;
+    this._setBattleHud(true);
+    this.camCtl.snapTo(this.playerKart.vehicle);
+    this.accumulator = 0;
+    this.music.setState('countdown');
+  }
+
+  _setBattleHud(on) {
+    document.getElementById('hud-pos').classList.toggle('hidden', on);
+    document.getElementById('hud-lap').classList.toggle('hidden', on);
+    document.getElementById('battle-info').classList.toggle('hidden', !on);
+  }
+
+  _updateBattleHud() {
+    const b = this.battle;
+    const el = document.getElementById('battle-info');
+    if (!b) { el.textContent = ''; return; }
+    const info = b.hudInfo();
+    let line = this.i18n.t(b.mode.nameKey);
+    if (info.timer > 0) line += ` · ${formatTime(info.timer)}`;
+    if (b.mode.id === 'energy') {
+      line += ` · ${this.i18n.t('battle.cores', { cores: info.primary, goal: info.goal })}`;
+    } else if (b.mode.id === 'zones' || b.mode.id === 'score') {
+      line += ` · ${this.i18n.t('gp.points', { points: info.primary })} · ${this.i18n.t('battle.hp')} ${info.hp}`;
+    } else {
+      line += ` · ${this.i18n.t('battle.hp')} ${info.hp}`;
+    }
+    el.textContent = line;
+  }
+
+  _battleStep(dt) {
+    const b = this.battle;
+    const wasCounting = b.state === 'countdown';
+    b.update(dt);
+    if (wasCounting && b.state === 'running') {
+      this.hud.countdown(this.i18n.t('race.go'), true);
+      this.audio.countBeep(true);
+      this.music.setState('battle');
+    }
+    if (b.state === 'countdown') {
+      const ceil = Math.ceil(b.countdownT);
+      if (ceil !== this._bLastCount && ceil >= 1) {
+        this._bLastCount = ceil;
+        this.hud.countdown(String(ceil));
+        this.audio.countBeep(false);
+      }
+    }
+
+    const racing = b.state === 'running';
+    const ZERO = { throttle: 0, brake: 1, steer: 0, drift: false, trick: false, item: false };
+    for (const kart of this.race.karts) {
+      const st = b.per.get(kart);
+      let input = ZERO;
+      if (racing && !st.eliminated) {
+        input = kart.isPlayer ? this._battleInput : kart.ai.update(dt, this.race.karts, true, this.items);
+      }
+      kart.vehicle.step(dt, input, false);
+      enforceArenaWalls(this.track.def, kart.vehicle);
+      if (racing && input.item) this.items.useItem(kart, this.race.karts);
+    }
+    if (racing) {
+      this.items.update(dt, this.race.karts, b.time);
+      this._battleObstacleHits(b, dt);
+    }
+    this.track.update(dt, this.time);
+  }
+
+  _battleObstacleHits(b, dt) {
+    const cols = this.track.getObstacleColliders();
+    if (!cols.length) return;
+    for (const kart of this.race.karts) {
+      const st = b.per.get(kart);
+      if (st.eliminated) continue;
+      kart._hitCd = (kart._hitCd || 0) - dt;
+      if (kart._hitCd > 0) continue;
+      const v = kart.vehicle;
+      for (const c of cols) {
+        const dx = v.pos.x - c.x, dz = v.pos.z - c.z;
+        if (dx * dx + dz * dz < (c.r + 1.2) * (c.r + 1.2)) {
+          b.hitLanded(null, kart);
+          v.vel.multiplyScalar(0.45);
+          kart._hitCd = 1.2;
+          this.camCtl.addTrauma(0.3);
+          this.burstAt(v.pos, 0xff8a5a, 10);
+          break;
+        }
+      }
+    }
+  }
+
+  _showBattleResults() {
+    const b = this.battle;
+    const i18n = this.i18n;
+    const order = b.standings();
+    const winner = b.winner;
+    this.hud.showHUD(false);
+    this._setBattleHud(false);
+    document.getElementById('hud-pos').classList.remove('hidden');
+    document.getElementById('hud-lap').classList.remove('hidden');
+
+    const headline = document.getElementById('results-headline');
+    headline.textContent = winner
+      ? i18n.t('battle.win', { name: i18n.t(winner.nameKey) })
+      : i18n.t('battle.timeUp');
+    const rowsEl = document.getElementById('results-rows');
+    rowsEl.innerHTML = '';
+    order.forEach((row, idx) => {
+      const div = document.createElement('div');
+      div.className = 'result-row' + (row.kart.isPlayer ? ' you' : '');
+      const pos = document.createElement('span');
+      pos.className = 'result-pos';
+      pos.textContent = row.eliminated ? 'KO' : i18n.t('ordinal.' + Math.min(4, idx + 1));
+      const name = document.createElement('span');
+      name.className = 'result-name';
+      name.textContent = i18n.t(row.kart.nameKey);
+      const stat = document.createElement('span');
+      stat.className = 'result-time';
+      if (b.mode.id === 'energy') stat.textContent = i18n.t('battle.cores', { cores: row.cores, goal: b.mode.goal });
+      else if (b.mode.id === 'zones' || b.mode.id === 'score') stat.textContent = i18n.t('gp.points', { points: Math.floor(row.score) });
+      else stat.textContent = row.eliminated ? '' : i18n.t('battle.hp') + ' ' + Math.ceil(row.hp);
+      div.append(pos, name, stat);
+      rowsEl.appendChild(div);
+    });
+    document.getElementById('results-stats').textContent = '';
+    document.getElementById('results-extra').innerHTML = '';
+    document.getElementById('btn-results-restart').textContent = i18n.t('battle.start');
+    this.hud.showScreen('screen-results');
+
+    const playerWon = !!winner && winner.isPlayer;
+    this.music.setState(playerWon ? 'victory' : 'defeat');
+    recordStats(this.save, { battles: 1, battleWins: playerWon ? 1 : 0 });
+    this._finishProgression({ kind: 'battle', won: playerWon }, {});
+  }
+
   // ---------------------------------------------------------------- race flow
   startRace() {
     this.appState = 'race';
@@ -482,6 +696,10 @@ class Game {
   }
 
   restartCurrentRace() {
+    if (this.mode === 'battle') {
+      this._startBattle();
+      return;
+    }
     if (this.mode === 'grandprix' && this.gpSession && this.gpSession.finished) {
       this.returnToMenu();
       return;
@@ -517,6 +735,12 @@ class Game {
     this.itemVisuals.update(0, this.time, this.items);
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;
     this._removeGhostVis();
+    if (this.battle) {
+      this.battle = null;
+      this._setBattleHud(false);
+      document.getElementById('hud-pos').classList.remove('hidden');
+      document.getElementById('hud-lap').classList.remove('hidden');
+    }
     this._placeOnGrid();
   }
 
@@ -579,6 +803,18 @@ class Game {
           gravity: 1.5, drag: 0.4,
         });
       }
+    } else if (type === 'battleKO') {
+      this.hud.notify(this.i18n.t('battle.ko', { name: this.i18n.t(payload.kart.nameKey) }));
+      this.burstAt(payload.kart.vehicle.pos, 0xff5d5d, 24);
+      this.camCtl.addTrauma(0.4);
+    } else if (type === 'zoneCaptured') {
+      if (payload.kart.isPlayer) {
+        this.hud.notify(this.i18n.t('battle.zones'));
+      }
+      this.burstAt(payload.zone.pos, 0x2fd8c8, 18);
+    } else if (type === 'battleOver') {
+      this.music.setState(payload.winner?.isPlayer ? 'victory' : 'defeat');
+      if (payload.winner) this.burstAt(payload.winner.vehicle.pos, 0xffd23f, 30);
     } else if (type === 'itemGet' || type === 'itemUse' || type === 'itemHit' || type === 'itemBlocked' ||
                type === 'boxPickup' || type === 'cloneFlash' || type === 'tempestZap' || type === 'chronoRestore') {
       this.onItemEvent(type, payload);
@@ -781,6 +1017,9 @@ class Game {
     } else if (type === 'itemHit') {
       this.burstAt(payload.pos, ITEMS[payload.itemId]?.color ?? 0xffffff, 16);
       this.camCtl.addTrauma(0.35);
+      if (this.mode === 'battle' && this.battle && payload.victim) {
+        this.battle.hitLanded(payload.attacker || null, payload.victim);
+      }
       if (payload.victim?.isPlayer) {
         this.hud.setItem(null);
         this.hud.notify(this.i18n.t('race.hitBy', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
@@ -793,6 +1032,9 @@ class Game {
       if (payload.victim?.isPlayer) this.hud.notify(this.i18n.t('race.itemBlocked'));
     } else if (type === 'boxPickup') {
       this.burstAt(payload.pos, 0xbaffec, 10);
+      if (this.mode === 'battle' && this.battle && payload.kart) {
+        this.battle.boxPicked(payload.kart);
+      }
     } else if (type === 'cloneFlash' || type === 'tempestZap') {
       this.burstAt(payload.pos, type === 'cloneFlash' ? 0xbaf0ff : 0x8ac8ff, 20);
       this.camCtl.addTrauma(0.3);
@@ -875,6 +1117,56 @@ class Game {
 
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
+    } else if (this.mode === 'battle' && this.battle) {
+      // ---------------------------------------------------------- battle mode
+      if (this.input.wasPressed('pause')) {
+        if (this.battle.state !== 'over' && !this._battleResultsShown) {
+          this.setPaused(!this.race.paused);
+        }
+      }
+      if (this._battleResultsShown && this.input.wasPressed('confirm')) {
+        this.onResultsPrimary();
+      }
+
+      if (!this.race.paused) {
+        this._battleInput = this.input.snapshot();
+        this.accumulator += rawDt;
+        let steps = 0;
+        while (this.accumulator >= FIXED_DT && steps < 4) {
+          this._battleStep(FIXED_DT);
+          this.accumulator -= FIXED_DT;
+          steps++;
+        }
+        if (steps === 4) this.accumulator = 0;
+
+        for (const kart of this.race.karts) {
+          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time);
+          if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
+        }
+        this.perFrameFX(rawDt);
+        if (this.race.itemsEnabled) {
+          this.itemVisuals.update(rawDt, this.time, this.items);
+          this.hud.setItem(this.items.heldItem(this.playerKart));
+        }
+
+        const pv = this.playerKart.vehicle;
+        if (this.battle.state === 'running') {
+          this.audio.updateEngine(pv.speedAbs / CONFIG.vehicle.maxSpeed,
+            this._battleInput.throttle, pv.boost.boosting);
+        } else {
+          this.audio.updateEngine(0, 0, false);
+        }
+        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time);
+        this._updateBattleHud();
+
+        if (this.battle.state === 'over' && !this._battleResultsShown) {
+          this._battleOverT += rawDt;
+          if (this._battleOverT > 1.6) {
+            this._battleResultsShown = true;
+            this._showBattleResults();
+          }
+        }
+      }
     } else {
       // pause toggle
       if (this.input.wasPressed('pause')) {

@@ -43,6 +43,8 @@ export const XP = {
   fastestLap: 12,
   ttTotalRecord: 35,
   ttLapRecord: 15,
+  battleBase: 35,
+  battleWin: 25,
   trophy: { bronze: 50, silver: 80, gold: 120, platinum: 170 },
 };
 
@@ -51,6 +53,7 @@ export const XP = {
 //   {kind:'gpRace', pos, rivals}                    grand prix race finished
 //   {kind:'trophy', trophy}                         cup finished, trophy won
 //   {kind:'tt', totalRecord, lapRecord}             time trial submitted
+//   {kind:'battle', won}                            battle arena finished
 export function xpForEvent(event) {
   switch (event.kind) {
     case 'race':
@@ -63,6 +66,8 @@ export function xpForEvent(event) {
     case 'tt':
       return (event.totalRecord ? XP.ttTotalRecord : 0)
         + (event.lapRecord ? XP.ttLapRecord : 0);
+    case 'battle':
+      return XP.battleBase + (event.won ? XP.battleWin : 0);
     default:
       return 0;
   }
