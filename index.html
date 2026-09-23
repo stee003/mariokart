@@ -94,6 +94,10 @@
           <input type="range" id="volume" min="0" max="1" step="0.05" />
         </div>
         <div class="setting-row">
+          <label data-i18n="settings.music">Music volume</label>
+          <input type="range" id="music-volume" min="0" max="1" step="0.05" />
+        </div>
+        <div class="setting-row">
           <label data-i18n="settings.items">Power-ups</label>
           <div class="lang-toggle">
             <button class="btn btn-small" id="items-on" data-i18n="settings.on">On</button>
@@ -101,6 +105,37 @@
           </div>
         </div>
         <button class="btn" id="btn-settings-back" data-i18n="settings.back">Back</button>
+      </div>
+    </div>
+
+    <!-- ===================== MODE SELECT ===================== -->
+    <div id="screen-mode" class="screen hidden">
+      <div class="menu-card">
+        <h2 data-i18n="menu.mode">Choose Game Mode</h2>
+        <div class="menu-buttons mode-buttons">
+          <button class="btn btn-primary" id="btn-mode-quick" data-i18n="menu.quick">Quick Race</button>
+          <button class="btn btn-primary" id="btn-mode-gp" data-i18n="menu.grandprix">Grand Prix</button>
+          <button class="btn btn-primary" id="btn-mode-tt" data-i18n="menu.timetrial">Time Trial</button>
+          <button class="btn" id="btn-mode-back" data-i18n="menu.back">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TRACK SELECT ===================== -->
+    <div id="screen-trackselect" class="screen hidden">
+      <div class="menu-card wide-card">
+        <h2 data-i18n="menu.selectTrack">Select Track</h2>
+        <div id="track-list" class="list-scroll"></div>
+        <button class="btn" id="btn-tracksel-back" data-i18n="menu.back">Back</button>
+      </div>
+    </div>
+
+    <!-- ===================== CUP SELECT ===================== -->
+    <div id="screen-cupselect" class="screen hidden">
+      <div class="menu-card wide-card">
+        <h2 data-i18n="menu.selectCup">Select Cup</h2>
+        <div id="cup-list" class="list-scroll"></div>
+        <button class="btn" id="btn-cupsel-back" data-i18n="menu.back">Back</button>
       </div>
     </div>
 
@@ -123,6 +158,7 @@
         <div id="results-headline"></div>
         <div id="results-rows"></div>
         <div id="results-stats"></div>
+        <div id="results-extra"></div>
         <div class="menu-buttons">
           <button class="btn btn-primary" id="btn-results-restart" data-i18n="menu.restart">Restart</button>
           <button class="btn" id="btn-results-menu" data-i18n="menu.main">Main Menu</button>

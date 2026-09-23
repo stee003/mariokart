@@ -159,3 +159,70 @@ English / Italiano.
 6. Best-lap ghost recording/playback.
 7. Split-screen or simple online time-trial leaderboards.
 8. Truck/physics variants (handling/acceleration/top-speed kart classes).
+
+---
+
+# Full-game expansion (in progress)
+
+The vertical slice above is the preserved foundation. Expansion is being added
+incrementally around it, each increment tested before the next begins.
+
+## Increment 1 — Content framework (commit a477ae8)
+
+- `src/content/stats.js` — 6-stat model (acceleration, top speed, handling,
+  weight, drift control, off-road), budget 34 per character, soft-cap balance.
+- `src/content/characters.js` — 14 original characters, no Pareto-domination.
+- `src/content/chassis.js` (8 chassis), `src/content/wheels.js` (12 wheel
+  types), `src/content/cosmetics.js` (paints/decals/exhausts/effects) — all
+  with meaningful, non-dominated trade-offs.
+- `src/content/loadout.js` — loadout → physics params + visuals pipeline.
+- Vehicle physics now consumes per-kart params and mods; procedural
+  character/kart meshes. 35 balance/content tests.
+
+## Increment 2 — Power-up system (commit c89f95a)
+
+- `src/content/items.js` — 22 original power-ups (Flux Bolt, Gravity Anchor,
+  Mirage Clone, Pulse Ring, Overdrive Core, Vortex Mine, Phase Shield, Time
+  Ripple, Magnet Surge, Repair Drone, +12 more) with distinct mechanics,
+  counters, weights, colors and icons. No Mario Kart copies.
+- `src/items.js` — headless-safe runtime: boxes, held items, projectiles,
+  zones, statuses, homing beacons; `src/itemMesh.js` — icons/meshes.
+- Wired into race flow, AI decision-making, HUD slot, procedural audio,
+  settings toggle. 38 item tests + full-race integration.
+
+## Increment 3 — Track pipeline & themed worlds (commit e97ce57)
+
+- `src/content/trackDefs.js` — SUNFORGE_DEF (bit-identical to the slice) +
+  15 new tracks across 12 themes; each track teaches a different skill and
+  has its own mechanic (wind lanes, low gravity, currents, pendulums,
+  flame jets, moving gears/sliders, shortcuts, alt routes).
+- `src/track.js` — def-driven TrackManager; zones surface as vehicle FX
+  (wind, gravity, grip, push); legacy accessors preserved so the original
+  environment renderer keeps working untouched.
+- `src/environment2.js` — 12 themed environment kits (desert, forest,
+  neon city, mountains, volcano, underwater, factory, floating isles,
+  ruins, storm world, crystal caves, space station) with tunnels,
+  bridges, canyons and environmental storytelling props.
+- Tests: 48 track tests (incl. arc-length parity with the slice) + 56
+  environment tests (colliders, kits, tunnels, obstacles).
+
+## Increment 4 — Music, Grand Prix cups & time trials (this commit)
+
+- `src/music.js` — MusicManager with a lookahead scheduler; `buildTheme(seed,
+  theme)` deterministically generates scale/tempo/bass/lead/drive per track,
+  so all 16 tracks get distinct original music. Dynamic states: menu,
+  countdown, racing, final lap (tempo up), battle, victory/defeat stingers.
+- `src/content/cups.js` — 6 cups (Ember, Gear, Neon, Storm, Crown, Sunforge
+  Championship) covering all 16 tracks; original scoring: 15-11-8-6-5-4-3-2
+  finish points +2 fastest lap, +1 lap-1 leader; trophies over 4 races
+  (platinum/gold/silver/bronze); progressive unlock chain (gold-gated final).
+- `src/grandprix.js` — pure-logic cup session state machine.
+- `src/ghost.js` + `src/timetriial.js` — ghost recorder/player with
+  interpolation, time-trial session, RecordsStore (best total, best lap,
+  splits, ghost persisted per track).
+- `src/main.js` — mode routing (Quick Race / Grand Prix / Time Trial),
+  mode-select + track-select + cup-select screens, GP standings/trophy and
+  TT record UIs, ghost playback visuals, music lifecycle, music volume
+  setting. Time trials race solo with items off.
+- Tests: 40 mode tests + boot smoke now simulates a full 4-race cup and a
+  solo time trial with ghost capture/replay.

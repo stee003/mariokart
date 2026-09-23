@@ -17,6 +17,7 @@ const BASE_STRINGS = {
   'menu.restart':      { en: 'Restart',                             it: 'Ricomincia' },
   'menu.main':         { en: 'Main Menu',                           it: 'Menu principale' },
   'menu.resume':       { en: 'Resume',                              it: 'Riprendi' },
+  'menu.mode':         { en: 'Choose Game Mode',                    it: 'Scegli la modalità' },
   'menu.press':        { en: 'An original arcade kart prototype',   it: 'Un prototipo arcade di kart originale' },
 
   'settings.title':    { en: 'Settings',                            it: 'Impostazioni' },
@@ -24,6 +25,7 @@ const BASE_STRINGS = {
   'settings.camDist':  { en: 'Camera distance',                     it: 'Distanza telecamera' },
   'settings.camHeight':{ en: 'Camera height',                       it: 'Altezza telecamera' },
   'settings.volume':   { en: 'Volume',                              it: 'Volume' },
+  'settings.music':    { en: 'Music volume',                        it: 'Volume musica' },
   'settings.back':     { en: 'Back',                                it: 'Indietro' },
 
   'controls.help':     { en: 'WASD / Arrows drive · SHIFT drift · SPACE aerial trick · R reset · ESC pause',

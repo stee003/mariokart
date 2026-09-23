@@ -86,10 +86,15 @@ camCtl.setColliders(env.colliders);
 
 const race = new RaceManager({ track, hud, audio, i18n, onEvent: () => {} });
 const visuals = new Map();
-const defs = ['aggressive', 'balanced', 'defensive', null];
-for (const ai of defs) {
-  const v = new VehicleController(track, ai === null);
-  const kart = { vehicle: v, ai: ai ? new AIController(v, track, ai) : null, nameKey: 'ai.you', isPlayer: ai === null };
+const defs = [
+  { ai: 'aggressive', nameKey: 'ai.cinder' },
+  { ai: 'balanced', nameKey: 'ai.zephyr' },
+  { ai: 'defensive', nameKey: 'ai.bastion' },
+  { ai: null, nameKey: 'ai.you' },
+];
+for (const d of defs) {
+  const v = new VehicleController(track, d.ai === null);
+  const kart = { vehicle: v, ai: d.ai ? new AIController(v, track, d.ai) : null, nameKey: d.nameKey, isPlayer: d.ai === null };
   race.registerKart(kart);
   visuals.set(v, buildKart(0xff8a2a, 0x2fd8c8, 0xf2a65a));
 }
@@ -138,6 +143,100 @@ check('finish time sane', (() => {
 race.restart();
 check('restart returns to countdown', race.state === 'countdown');
 check('laps reset', race.kartState.get(playerKart.vehicle).lap === 0);
+
+// ---------------------------------------------------- grand prix cup session
+const { GrandPrixSession } = await import('../src/grandprix.js');
+const gp = new GrandPrixSession('ember', 'ai.you');
+check('gp starts on first cup track', gp.trackId === 'sunforge_circuit');
+
+function runFullRace(raceMgr, player, { onLap } = {}) {
+  let t = 0;
+  let lap1Leader = null;
+  raceMgr.onEvent = (type, payload) => {
+    if (type === 'lapComplete' && payload.lap === 1 && !lap1Leader) {
+      lap1Leader = payload.kart.nameKey;
+      onLap && onLap(payload);
+    } else if (type === 'lapComplete') {
+      onLap && onLap(payload);
+    }
+  };
+  while (raceMgr.state !== 'results' && t < 600) {
+    raceMgr.playerInput = raceMgr.state === 'racing'
+      ? player.ai.update(dt, raceMgr.karts, true)
+      : { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
+    raceMgr.update(dt);
+    t += dt;
+  }
+  return lap1Leader;
+}
+
+while (!gp.finished) {
+  race.lapsOverride = gp.laps;
+  race.restart();
+  check(`gp race ${gp.raceIndex + 1} lap override applied`,
+    race.kartState.get(playerKart.vehicle).laps === gp.laps);
+  const lap1 = runFullRace(race, playerKart);
+  if (lap1) gp.markLap1Leader(lap1);
+  const rows = race.positions().map((kart, i) => ({
+    nameKey: kart.nameKey, pos: i + 1,
+    bestLap: race.kartState.get(kart.vehicle).bestLap,
+  }));
+  gp.recordRace(rows);
+}
+const gpFinal = gp.finalStandings();
+check('gp finished after 4 races', gp.results.length === 4);
+check('gp standings cover all karts', gp.standings().length === 4);
+check('gp player points positive', gpFinal.playerPoints > 0);
+check('gp trophy awarded or absent', gpFinal.trophy === null ||
+  ['bronze', 'silver', 'gold', 'platinum'].includes(gpFinal.trophy));
+
+// --------------------------------------------------------------- time trial
+const { TimeTrialSession, RecordsStore } = await import('../src/timetriial.js');
+const { GhostPlayer, serializeGhost, deserializeGhost } = await import('../src/ghost.js');
+
+const ttRace = new RaceManager({ track, hud, audio, i18n, onEvent: () => {} });
+const ttVehicle = new VehicleController(track, true);
+const ttKart = { vehicle: ttVehicle, ai: new AIController(ttVehicle, track, 'balanced'), nameKey: 'ai.you', isPlayer: true };
+ttRace.registerKart(ttKart);
+ttRace.lapsOverride = 3;
+
+const tt = new TimeTrialSession('sunforge_circuit');
+tt.start(0);
+ttRace.restart();
+check('tt solo grid has one kart', ttRace.karts.length === 1);
+
+let ghostFrames = 0;
+ttRace.onEvent = (type, payload) => {
+  if (type === 'lapComplete' && payload.kart.isPlayer) {
+    tt.onLap(ttRace.raceTime, payload.lapTime);
+  }
+};
+let ttT = 0;
+while (ttRace.state !== 'results' && ttT < 600) {
+  ttRace.playerInput = ttRace.state === 'racing'
+    ? ttKart.ai.update(dt, ttRace.karts, true)
+    : { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
+  ttRace.update(dt);
+  if (ttRace.state === 'racing') { tt.captureGhost(ttVehicle); ghostFrames++; }
+  ttT += dt;
+}
+check('tt race finished', ttRace.state === 'results');
+check('tt recorded 3 laps', tt.lapTimes.length === 3);
+check('tt ghost frames captured', ghostFrames > 1000, `frames=${ghostFrames}`);
+
+const ttResult = tt.finish();
+const records = new RecordsStore(save);
+const updated = records.submit(ttResult);
+check('tt record submitted', updated.includes('total'));
+const stored = records.get('sunforge_circuit');
+check('tt record persisted with ghost', !!stored && Array.isArray(stored.ghost) && stored.ghost.length > 1000);
+
+// ghost round-trip + playback interpolation
+const ghostData = deserializeGhost(serializeGhost(stored.ghost));
+const player2 = new GhostPlayer(ghostData, dt);
+const p0 = player2.update(dt);
+const p1 = player2.update(dt);
+check('ghost playback produces poses', !!p0 && !!p1 && Number.isFinite(p0.x) && Number.isFinite(p1.yaw));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -32,6 +32,7 @@ export class RaceManager {
     this.finishTimer = 0;
     this.wrongWayTimer = 0;
     this.paused = false;
+    this.lapsOverride = null;   // modes (GP escalation, time trial) set this
   }
 
   registerKart(kart) {
@@ -41,7 +42,7 @@ export class RaceManager {
 
   _freshKartState() {
     return {
-      nextCp: 1, lap: 0, laps: R.laps,
+      nextCp: 1, lap: 0, laps: this.lapsOverride ?? R.laps,
       lapStart: 0, bestLap: null, lapTimes: [],
       prevProg: 0, finished: false, finishTime: null,
     };
@@ -138,6 +139,7 @@ export class RaceManager {
       this.state = 'racing';
       this.hud.countdown(this.i18n.t('race.go'), true);
       this.audio.countBeep(true);
+      this.onEvent && this.onEvent('raceGo', {});
       // player rocket start
       const player = this.karts.find((k) => k.isPlayer);
       if (player && this.playerArmed && this.playerInput.throttle &&
@@ -188,6 +190,7 @@ export class RaceManager {
       }
     }
     st.lap++;
+    this.onEvent && this.onEvent('lapComplete', { kart, lap: st.lap, lapTime });
     if (st.lap >= st.laps) {
       st.finished = true;
       st.finishTime = this.raceTime;
@@ -195,6 +198,7 @@ export class RaceManager {
     } else if (kart.isPlayer && st.lap === st.laps - 1) {
       this.hud.notify(this.i18n.t('race.finalLap'));
       this.audio.click();
+      this.onEvent && this.onEvent('playerFinalLap', {});
     }
   }
 
@@ -209,6 +213,7 @@ export class RaceManager {
       this.onEvent && this.onEvent('celebrate', {
         pos: kart.vehicle.pos.clone(), win: pos === 1,
       });
+      this.onEvent && this.onEvent('playerFinished', { pos });
     }
   }
 
