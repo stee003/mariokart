@@ -66,7 +66,7 @@ export class RaceManager {
     this.hud.onRaceStart();
   }
 
-  restart() { this.start(this.track.startGrid()); }
+  restart() { this.start(this.track.startGrid(this.karts.length)); }
 
   // ----------------------------------------------------------------- update
   update(rawDt) {

@@ -403,10 +403,54 @@ export function buildKartFromLoadout(loadout) {
 }
 
 // Per-frame visual update from physics state.
-export function updateKartVisual(kartVis, vehicle, dt, time) {
+//
+// `alpha` is the fixed-step interpolation factor (0..1) from the main loop.
+// Physics advances on a fixed 60 Hz step while rendering runs at the display
+// rate, so without interpolating between the previous and current physics
+// pose the kart visibly stutters on bumps and elevation changes - the
+// vertical axis is where the mismatch shows up first. Callers that do not
+// interpolate (headless tests) simply leave it at 1.
+export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
   const g = kartVis.group;
-  g.position.set(vehicle.pos.x, vehicle.y, vehicle.pos.z);
-  g.rotation.y = vehicle.yaw;
+
+  // -------------------------------------------------- pose interpolation
+  const prev = kartVis._prev || (kartVis._prev = {
+    x: vehicle.pos.x, y: vehicle.y, z: vehicle.pos.z, yaw: vehicle.yaw, stamp: -1,
+  });
+  // A new physics step is detected by the vehicle's own step counter, so the
+  // previous pose is only latched once per step, never once per frame.
+  if (vehicle.stepId !== prev.stamp) {
+    prev.x = prev.cx ?? vehicle.pos.x;
+    prev.y = prev.cy ?? vehicle.y;
+    prev.z = prev.cz ?? vehicle.pos.z;
+    prev.yaw = prev.cyaw ?? vehicle.yaw;
+    prev.cx = vehicle.pos.x; prev.cy = vehicle.y;
+    prev.cz = vehicle.pos.z; prev.cyaw = vehicle.yaw;
+    prev.stamp = vehicle.stepId;
+  }
+  const a = Math.max(0, Math.min(1, alpha));
+  // shortest-arc yaw blend
+  let dYaw = prev.cyaw - prev.yaw;
+  while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+  while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+
+  g.position.set(
+    prev.x + (prev.cx - prev.x) * a,
+    prev.y + (prev.cy - prev.y) * a,
+    prev.z + (prev.cz - prev.z) * a,
+  );
+  g.rotation.y = prev.yaw + dYaw * a;
+  // published so the camera can follow the same interpolated pose
+  kartVis.renderPose = {
+    x: g.position.x, y: g.position.y, z: g.position.z, yaw: g.rotation.y,
+  };
+
+  // The chassis rides the terrain: pitch with the slope it is climbing or
+  // descending, roll with the cross-slope, and compress on impact. Airborne
+  // karts level out (terrainPitch/Roll decay to 0 in the vehicle).
+  g.rotation.order = 'YXZ';
+  g.rotation.x = vehicle.terrainPitch || 0;
+  g.rotation.z = vehicle.terrainRoll || 0;
 
   // aerial trick spin
   let trickPitch = 0;
@@ -421,13 +465,17 @@ export function updateKartVisual(kartVis, vehicle, dt, time) {
   // steering
   for (const p of kartVis.frontPivots) p.rotation.y = -vehicle.steer * 0.42;
 
-  // body attitude: roll with lateral slide, pitch with accel, hop squash
+  // Body attitude LOCAL to the (already terrain-aligned) group: roll with
+  // lateral slide, pitch with drift/tricks. Terrain lean lives on the group
+  // so these two never fight each other - previously the ground slope was
+  // ignored here entirely and the kart drove up ramps perfectly level.
   const targetRoll = Math.max(-0.22, Math.min(0.22, -vehicle.latSpeed * 0.02));
   const targetPitch = Math.max(-0.14, Math.min(0.14,
     (vehicle.drift.drifting ? -0.06 : 0) + trickPitch));
   body.rotation.z += (targetRoll - body.rotation.z) * Math.min(1, 10 * dt);
   body.rotation.x += (targetPitch - body.rotation.x) * Math.min(1, 12 * dt);
-  body.position.y = 0;
+  // suspension: the chassis dips into the wheels on landing, then rebounds
+  body.position.y = -(vehicle.suspension || 0) * 0.22;
 
   // item-hit spinout visual
   if (vehicle._spinT > 0) {
@@ -449,11 +497,12 @@ export function updateKartVisual(kartVis, vehicle, dt, time) {
     kartVis.flameMat.color.offsetHSL(Math.sin(time * 20) * 0.06, 0, Math.sin(time * 33) * 0.08);
   }
 
-  // blob shadow follows on the ground
+  // blob shadow follows on the ground, under the INTERPOLATED body so it
+  // never lags a frame behind the kart on bumpy ground
   const sh = kartVis.shadow;
   const groundY = vehicle.surf ? vehicle.surf.y : vehicle.y;
-  sh.position.set(vehicle.pos.x, groundY + 0.04, vehicle.pos.z);
-  const h = Math.max(0, vehicle.y - groundY);
+  sh.position.set(g.position.x, groundY + 0.04, g.position.z);
+  const h = Math.max(0, g.position.y - groundY);
   const s = Math.max(0.45, 1 - h * 0.12);
   sh.scale.set(s, s, s);
   sh.material.opacity = Math.max(0.06, 0.3 - h * 0.05);

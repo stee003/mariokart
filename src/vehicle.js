@@ -48,6 +48,14 @@ export class VehicleController {
     this.climbRate = 0;
     this.lastFallSpeed = 0;
 
+    // Terrain attitude, resolved into the KART's frame (not the road's) so
+    // the chassis and the pilot lean with the actual slope they are on.
+    // Consumed by kartMesh/characterMesh; physics never reads these back.
+    this.terrainPitch = 0;      // rad, positive = nose up
+    this.terrainRoll = 0;       // rad, positive = right side down
+    this.suspension = 0;        // 0..1 compression from the last impact
+    this.stepId = 0;            // physics steps taken (render interpolation)
+
     this.mods = null;                      // per-frame item-system modifiers
     this.fx = {};                          // per-frame FX event flags
   }
@@ -71,6 +79,14 @@ export class VehicleController {
     this.offTrackTimer = 0;
     this.stuckTimer = 0;
     this.trick.active = false;
+    this.airTime = 0;
+    this.climbRate = 0;
+    this.lastFallSpeed = 0;
+    // clear the terrain attitude so a respawn never inherits the pose the
+    // kart had when it fell off the track
+    this.terrainPitch = 0;
+    this.terrainRoll = 0;
+    this.suspension = 0;
   }
 
   forward(out) { return out.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)); }
@@ -88,6 +104,9 @@ export class VehicleController {
   // ------------------------------------------------------------------ step
   // input: {throttle, brake, steer, drift, trick}
   step(dt, input, locked = false) {
+    // Monotonic step counter. Renderers use it to latch the previous pose
+    // exactly once per physics step so they can interpolate between steps.
+    this.stepId++;
     this.fx = { ...this.pendingFx };
     this.pendingFx = {};
     const track = this.track;
@@ -208,38 +227,91 @@ export class VehicleController {
     // --- vertical ------------------------------------------------------------
     // surface() uses pos.y to lock the deck on multi-level sections and
     // vel to keep cross-leg snaps aligned with the kart's heading.
+    //
+    // Terrain following is driven by DISTANCE TRAVELLED, not by frame count:
+    // how far the kart may climb or drop this step scales with how far it
+    // actually moved, so bumps and elevation changes feel identical at any
+    // frame rate and at any speed. Two distinct cases are separated:
+    //   * a real slope        -> follow it smoothly, no air time at all
+    //   * a discontinuity     -> re-seat instantly, never inject fake velocity
     this.pos.y = this.y;
     const surf = track.surface(this.pos, this.hint, this.vel);
     this.surf = surf;
     const groundY = surf.y;
+    const T = CONFIG.terrain;
+    // Horizontal distance covered this step (floored so a stationary kart
+    // still settles onto the ground instead of hovering above it).
+    const travel = Math.max(0.05, Math.hypot(this.vel.x, this.vel.z) * dt);
 
     if (this.grounded) {
       const prevY = this.y;
-      // Snap the kart to the ground, but bound the per-step lift: a real ramp
-      // can only raise the kart at ~10-14 m/s, so anything beyond that is a
-      // surface discontinuity (deck snap / lane flip) and must not inject
-      // climb velocity into the launch bookkeeping.
-      const maxLift = 0.22; // m per 60Hz step (falls are snapped unbounded below)
-      this.y = prevY + Math.min(groundY - prevY, maxLift);
-      const implicit = (this.y - prevY) / dt;
-      this.vy = implicit;
-      // remember how fast the ground was climbing (ramp launches)
-      if (implicit > 0.3) this.climbRate = Math.min(this.climbRate * 0.5 + implicit * 0.5, 14);
-      else this.climbRate = Math.max(0, this.climbRate - 18 * dt);
-      if (groundY < prevY - 0.4) {
-        // terrain fell away - become airborne
-        this.grounded = false;
-        if (this.climbRate > 0.6) {
-          // full launch off actual ramps; soft lip-pop elsewhere
-          this.vy = Math.min(this.climbRate * (this.onRamp ? CONFIG.boost.rampLaunchMult : 1.0), this.onRamp ? 99 : 8.5);
-          this.fx.launch = this.vy;
-        } else {
+      const delta = groundY - prevY;
+
+      if (delta >= 0) {
+        // -------------------------------------------------- climbing
+        // A genuine slope can lift the kart at most maxClimbRate; anything
+        // steeper is a surface discontinuity (deck snap, lane flip, kerb
+        // edge) and is re-seated WITHOUT feeding the launch bookkeeping.
+        const maxLift = T.maxClimbRate * dt;
+        if (delta > maxLift + T.popThreshold) {
+          // Surface discontinuity (deck snap / chute mouth). Re-seat FAST but
+          // still continuously: an instant teleport is visible as a pop, while
+          // gliding over a few frames reads as the suspension taking the step.
+          // No climb credit either way, so this can never fake a ramp launch.
+          this.y = prevY + Math.min(delta, T.reseatRate * dt);
           this.vy = 0;
+          this.climbRate = 0;
+        } else {
+          this.y = prevY + Math.min(delta, maxLift);
+          const implicit = (this.y - prevY) / dt;
+          this.vy = implicit;
+          // Remember the climb rate so leaving a ramp lip launches the kart.
+          // Ramps report their true grade, so the launch speed is derived
+          // from geometry * speed rather than from a sampled step height.
+          const geometric = Math.max(0, surf.slope ?? 0) * Math.hypot(this.vel.x, this.vel.z);
+          const climb = Math.max(implicit, geometric);
+          if (climb > 0.3) this.climbRate = Math.min(this.climbRate * 0.4 + climb * 0.6, T.maxClimbRate);
+          else this.climbRate = Math.max(0, this.climbRate - T.liftDecay * dt);
         }
-        this.climbRate = 0;
-        this.airTime = 0;
+      } else {
+        // -------------------------------------------------- descending
+        // Drops the wheels can absorb scale with distance travelled: a slope
+        // the kart is driving down stays glued, a genuine edge launches it.
+        const follow = T.snapBase + T.snapPerMetre * travel;
+        // A drop only counts as "the terrain fell away" if the surface the
+        // kart is standing on is still the SAME surface. Crossing onto or
+        // off a shortcut deck reports a step that is an artefact of the
+        // query, not real geometry, so it is re-seated instead of launching
+        // the kart off a seam.
+        const deckChanged = surf.useShortcut !== this._prevOnSc;
+        if (-delta > follow && deckChanged) {
+          this.y = prevY - Math.min(-delta, T.reseatRate * dt);
+          this.vy = 0;
+          this.climbRate = 0;
+        } else if (-delta <= follow) {
+          this.y = groundY;
+          // Inherit the descent as (bounded) downward velocity so crests
+          // roll over smoothly instead of chattering between air/ground.
+          this.vy = Math.max(delta / dt, -T.crestFallSpeed);
+          this.climbRate = Math.max(0, this.climbRate - T.liftDecay * dt);
+        } else {
+          // terrain genuinely fell away - become airborne
+          this.grounded = false;
+          this.airTime = 0;
+          if (this.climbRate > 0.6) {
+            // full launch off actual ramps; soft lip-pop elsewhere
+            this.vy = Math.min(
+              this.climbRate * (this.onRamp ? CONFIG.boost.rampLaunchMult : 1.0),
+              this.onRamp ? 99 : 8.5);
+            this.fx.launch = this.vy;
+          } else {
+            // rolled off an edge: carry the slope's descent, not a hard 0
+            this.vy = Math.max(-T.crestFallSpeed, Math.min(0, this.vy));
+          }
+          this.climbRate = 0;
+        }
       }
-      this.onRamp = surf.onRamp;
+      if (this.grounded) this.onRamp = surf.onRamp;
     } else {
       this.airTime += dt;
       this.vy -= CONFIG.air.gravity * dt * (surf.fx?.gravMult ?? 1);   // low-gravity zones
@@ -261,12 +333,21 @@ export class VehicleController {
       }
 
       if (this.y <= groundY) {
+        const fall = -this.vy;
         this.y = groundY;
         this.grounded = true;
+        this.onRamp = surf.onRamp;
+        const airTime = this.airTime;
         this.airTime = 0;
-        this.lastFallSpeed = -this.vy;
+        this.lastFallSpeed = Math.max(0, fall);
         this.vy = 0;
-        this.fx.landing = this.lastFallSpeed;
+        // Only a real flight reports a landing. Grazing touchdowns (rolling
+        // over a bump, the drift hop) used to spam landing FX/audio every
+        // few frames, which is what made the kart look like it was
+        // stuttering over uneven ground.
+        if (airTime >= T.minAirTime || fall > T.minLandingSpeed) {
+          this.fx.landing = this.lastFallSpeed;
+        }
         if (this.trick.active) { this.trick.active = false; this.trick.landed = false; }
         if (this.trick.landed) {
           this.trick.landed = false;
@@ -276,6 +357,11 @@ export class VehicleController {
         // NOTE: an active drift survives landings (hop-drifts & ramp landings)
       }
     }
+
+    this._prevOnSc = surf.useShortcut;
+
+    // --- terrain attitude (visual, but simulated on the fixed step) ----------
+    this._updateAttitude(dt, surf);
 
     // --- boost pads -----------------------------------------------------------
     this.padTimer = Math.max(0, this.padTimer - dt);
@@ -308,6 +394,42 @@ export class VehicleController {
     } else {
       this.stuckTimer = 0;
     }
+  }
+
+  // Resolve the surface gradient into the kart's own frame and smooth it.
+  //
+  // The surface reports its slope along the ROAD direction and its bank
+  // across it. A kart crossing a ramp diagonally therefore needs both
+  // projected onto its heading, otherwise the chassis pitches when it
+  // should roll (and snaps back the instant the kart straightens up) -
+  // that mismatch is what made the animations look broken on elevation
+  // changes. Airborne karts level out instead of freezing at the last
+  // ground angle.
+  _updateAttitude(dt, surf) {
+    const T = CONFIG.terrain;
+    let targetPitch = 0, targetRoll = 0;
+    if (this.grounded && surf) {
+      const slope = surf.slope || 0;      // rise per metre along road dir
+      const bank = surf.bank || 0;        // rise per metre along road right
+      // kart heading vs road frame
+      const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+      const alongDot = fx * surf.dir.x + fz * surf.dir.z;
+      const rightDot = fx * surf.right.x + fz * surf.right.z;
+      // gradient component the kart drives INTO -> pitch
+      const gradFwd = slope * alongDot + bank * rightDot;
+      // gradient component across the kart -> roll
+      const gradSide = slope * -rightDot + bank * alongDot;
+      targetPitch = Math.max(-T.maxPitch, Math.min(T.maxPitch, Math.atan(gradFwd)));
+      targetRoll = Math.max(-T.maxRoll, Math.min(T.maxRoll, Math.atan(gradSide)));
+    }
+    this.terrainPitch += (targetPitch - this.terrainPitch) * Math.min(1, T.pitchSmooth * dt);
+    this.terrainRoll += (targetRoll - this.terrainRoll) * Math.min(1, T.rollSmooth * dt);
+
+    // suspension: compress on impact, recover smoothly
+    if (this.fx.landing) {
+      this.suspension = Math.min(1, this.suspension + this.fx.landing * T.squashPerFallSpeed);
+    }
+    this.suspension = Math.max(0, this.suspension - T.squashRecover * dt * Math.max(0.2, this.suspension));
   }
 
   // Convenience for HUD/AI

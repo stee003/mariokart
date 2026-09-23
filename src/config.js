@@ -5,9 +5,15 @@
 // Units: meters, seconds, radians. Speeds in m/s.
 // ============================================================================
 
+// Lobby / grid capacity. One shared constant so the start grid, the AI
+// roster, the rival-count setting, the HUD ordinals and the authoritative
+// multiplayer room all agree on how many racers a session holds.
+export const MAX_PLAYERS = 8;
+
 export const CONFIG = {
   race: {
     laps: 3,
+    maxPlayers: MAX_PLAYERS,     // racers per lobby (player + rivals)
     countdownTime: 3.0,          // seconds of 3-2-1 before GO
     // Holding throttle inside this window BEFORE "GO" arms a rocket start.
     startBoostArmWindow: 0.5,    // seconds before GO during which holding throttle counts
@@ -69,6 +75,29 @@ export const CONFIG = {
     trickTime: 0.72,             // seconds for a full aerial spin
     trickBoost: { duration: 0.6, speedMult: 1.12, accelMult: 1.9 },
     landingShakePerFallSpeed: 0.02,
+  },
+
+  // --------------------------------------------------------------------
+  // Terrain following. Every value below is a RATE or a DISTANCE-PER-METRE
+  // -TRAVELLED, never a per-frame constant, so bumps and elevation changes
+  // behave identically at 30, 60 or 144 Hz and at any speed.
+  // --------------------------------------------------------------------
+  terrain: {
+    maxClimbRate: 14.0,          // m/s the ground may lift a grounded kart
+    popThreshold: 1.0,           // m of discontinuity that counts as a "pop"
+    reseatRate: 26.0,            // m/s the kart glides over a popped step
+    snapBase: 0.30,              // m of drop always followed (bumps, kerbs)
+    snapPerMetre: 1.15,          // extra drop followed per metre travelled
+    crestFallSpeed: 6.0,         // max downward speed inherited leaving a crest
+    minAirTime: 0.18,            // below this a touchdown raises no landing FX
+    minLandingSpeed: 2.5,        // m/s fall that always counts as a landing
+    liftDecay: 18.0,             // 1/s decay of the remembered climb rate
+    pitchSmooth: 9.0,            // 1/s smoothing of the visual chassis pitch
+    rollSmooth: 8.0,             // 1/s smoothing of the visual chassis roll
+    maxPitch: 0.55,              // rad of terrain pitch the chassis will show
+    maxRoll: 0.40,               // rad of terrain roll the chassis will show
+    squashPerFallSpeed: 0.022,   // suspension compression per m/s of impact
+    squashRecover: 5.5,          // 1/s recovery of the suspension squash
   },
 
   camera: {

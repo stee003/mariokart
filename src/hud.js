@@ -7,6 +7,7 @@
 import { CONFIG } from './config.js';
 import { formatTime } from './race.js';
 import { ITEMS } from './content/items.js';
+import { Minimap } from './minimap.js';
 
 // Canvas-drawn original icons for every power-up (no fonts/assets needed).
 export function drawItemIcon(canvas, icon, color) {
@@ -155,7 +156,12 @@ export class HUDManager {
       itemBox: document.getElementById('item-box'),
       itemIcon: document.getElementById('item-icon'),
       itemName: document.getElementById('item-name'),
+      minimapBox: document.getElementById('minimap-box'),
+      minimap: document.getElementById('minimap'),
     };
+    // Track overview. Hidden until a race starts and while the player has
+    // turned it off in the settings.
+    this.minimap = new Minimap(this.el.minimap);
     this._currentItem = null;
     this.notifyTimer = 0;
     this._lastPos = -1;
@@ -179,10 +185,20 @@ export class HUDManager {
     this._currentItem = null;   // force item slot re-render in new language
   }
 
-  ordinal(p) { return this.i18n.t(`ordinal.${p}`) || `${p}`; }
+  // Falls back to a plain number if a lobby ever grows past the ordinal
+  // dictionary (t() echoes the key when it is missing).
+  ordinal(p) {
+    const key = `ordinal.${p}`;
+    const s = this.i18n.t(key);
+    return s === key ? `${p}` : s;
+  }
 
   // ------------------------------------------------------------------ state
-  showHUD(visible) { this.el.hud.classList.toggle('hidden', !visible); }
+  showHUD(visible) {
+    this.el.hud.classList.toggle('hidden', !visible);
+    // the minimap lives inside the HUD, so it follows it in and out
+    this.showMinimap(visible);
+  }
 
   // Exactly one screen is visible at a time. Every element with the
   // .screen class participates, so new screens (mode/track/cup select,
@@ -250,6 +266,35 @@ export class HUDManager {
     const meter = this.el.boostMeter;
     meter.classList.toggle('charged', v.drift.level >= 3);
     meter.classList.toggle('boost-active', v.boost.boosting);
+
+    // minimap
+    this.drawMinimap(race.karts, player, race.items);
+  }
+
+  // ------------------------------------------------------------- minimap
+  // Bake the overview for a freshly loaded track (or arena).
+  setMinimapTrack(track) {
+    this.minimap?.setTrack(track);
+  }
+
+  showMinimap(show) {
+    const box = this.el.minimapBox;
+    if (!box) return;
+    const on = !!show && this.minimapEnabled !== false;
+    box.classList.toggle('hidden', !on);
+    if (!on) this.minimap?.clear();
+  }
+
+  // Settings toggle: remembered by the caller, applied here.
+  setMinimapEnabled(on) {
+    this.minimapEnabled = !!on;
+    if (!on) this.showMinimap(false);
+  }
+
+  drawMinimap(karts, player, items = null) {
+    if (this.minimapEnabled === false) return;
+    if (this.el.minimapBox?.classList.contains('hidden')) return;
+    this.minimap?.draw(karts, player, items);
   }
 
   // ------------------------------------------------------------------ center

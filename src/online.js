@@ -21,7 +21,7 @@
 
 // Multiplayer simulation, validation and matchmaking live in a separate
 // dependency-free module so the offline provider remains unchanged.
-export { MODES, REGIONS, TICK_RATE, validateInput, AntiCheat, AuthoritativeRace, Matchmaker, Rating, ReportStore, leaderboardRows } from './multiplayer.js';
+export { MODES, REGIONS, TICK_RATE, MAX_PLAYERS, MIN_PLAYERS, validateInput, AntiCheat, AuthoritativeRace, Matchmaker, Rating, ReportStore, leaderboardRows } from './multiplayer.js';
 export { MultiplayerClient } from './multiplayerClient.js';
 
 export class OnlineUnavailable extends Error {

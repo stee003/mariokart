@@ -200,7 +200,10 @@ export class TrackManager {
 
   _mkRamp(s0, len, lat, halfW, rise) {
     const p = this.pointAt(s0);
-    return { s0, s1: s0 + len, lat, halfW, rise, baseY: p.pos.y, dir: p.dir.clone(), len };
+    return {
+      s0, s1: s0 + len, lat, halfW, rise, baseY: p.pos.y, dir: p.dir.clone(), len,
+      grade: rise / Math.max(0.001, len),   // rise per metre travelled
+    };
   }
 
   update(dt, time) {
@@ -286,46 +289,100 @@ export class TrackManager {
 
   _nearest(pos, samples, hintIdx, window) {
     const m = samples.length;
-    // Height band: when the query carries a usable altitude (karts always do),
-    // samples whose ground is way above/below it are only considered if NO
-    // in-band candidate exists. On multi-level sections (helixes, elevated
-    // cities, island hops) this locks the query to the deck the kart is
-    // actually on; single-level behaviour is unchanged.
+    // Deck selection. When the query carries a usable altitude (karts always
+    // do), samples whose ground is far above/below it are penalised so the
+    // query locks onto the deck the kart is actually on (helixes, elevated
+    // cities, island hops).
+    //
+    // The penalty is CONTINUOUS and saturating. The previous version used a
+    // hard 2.2 m band that partitioned candidates into two priority classes:
+    // a sample drifting across the band edge flipped the match to a deck
+    // metres away in a single step, which the vehicle read as the ground
+    // vanishing. That flip is exactly the elevation glitch - a smooth cost
+    // removes it while keeping the same deck preference.
     const py = pos.y;
     const hasY = typeof py === 'number' && Number.isFinite(py);
-    const BAND = 2.2;
     let best = -1, bestD = Infinity, bestAlong = 0, bestLat = 0;
-    let bestB = -1, bestBD = Infinity, bestBAlong = 0, bestBLat = 0;
     const test = (i) => {
-      const sm = samples[((i % m) + m) % m];
+      const idx = ((i % m) + m) % m;
+      const sm = samples[idx];
       const dx = pos.x - sm.pos.x, dz = pos.z - sm.pos.z;
       const along = dx * sm.dir.x + dz * sm.dir.z;
       const lat = dx * sm.right.x + dz * sm.right.z;
-      const d = lat * lat + Math.min(0, along) * Math.min(0, along) * 0.25 + Math.max(0, along - this.step) ** 2 * 0.25;
-      const idx = ((i % m) + m) % m;
-      if (hasY && Math.abs(sm.pos.y - py) <= BAND) {
-        if (d < bestBD) { bestBD = d; bestB = idx; bestBAlong = along; bestBLat = lat; }
-      } else {
-        if (d < bestD) { bestD = d; best = idx; bestAlong = along; bestLat = lat; }
+      let d = lat * lat
+        + Math.min(0, along) * Math.min(0, along) * 0.25
+        + Math.max(0, along - this.step) ** 2 * 0.25;
+      if (hasY) {
+        const dy = sm.pos.y - py;
+        const dy2 = dy * dy;
+        // saturating quadratic: strong near the deck, bounded far from it so
+        // a kart mid-jump does not lose all lateral discrimination
+        d += HEIGHT_WEIGHT * dy2 / (1 + dy2 / HEIGHT_SAT2);
       }
+      if (d < bestD) { bestD = d; best = idx; bestAlong = along; bestLat = lat; }
     };
     if (hintIdx >= 0) {
       for (let k = -window; k <= window; k++) test(hintIdx + k);
     } else {
       for (let i = 0; i < m; i += 2) test(i);
-      const h = bestB >= 0 ? bestB : best;
-      for (let k = -2; k <= 2; k++) test(h + k);
+      for (let k = -2; k <= 2; k++) test(best + k);
     }
-    return bestB >= 0
-      ? { idx: bestB, along: bestBAlong, lat: bestBLat }
-      : { idx: best, along: bestAlong, lat: bestLat };
+    return { idx: best, along: bestAlong, lat: bestLat };
+  }
+
+  // ----------------------------------------------------------------- ramps
+  // Ramp contribution at (progress, lateral) over a base road height.
+  //
+  // Both the longitudinal and the lateral profile are CONTINUOUS: the deck
+  // fades in over a short toe apron and fades back to the road across a
+  // feather band outside the ramp's half-width. Without the feather a kart
+  // weaving across the ramp edge teleported up/down by the full rise in a
+  // single step, which the vehicle then read as "the ground fell away" and
+  // punted it into the air - the bump/elevation glitch.
+  //
+  // Returns { y, slope, bank, onRamp, exitSoon, grade } where
+  //   slope = d(height)/d(distance) along the track direction
+  //   bank  = d(height)/d(distance) laterally (positive = rising to +right)
+  //   grade = the ramp's own rise-per-metre (used for launch velocity)
+  _rampAt(progress, lateral, roadY) {
+    let y = roadY, slope = 0, bank = 0;
+    let onRamp = false, exitSoon = false, grade = 0;
+    for (const r of this.ramps) {
+      let rel = progress - r.s0;
+      if (rel < -this.L / 2) rel += this.L;
+      if (rel > this.L / 2) rel -= this.L;
+      if (rel < -RAMP_TOE || rel > r.len) continue;
+
+      const latDist = Math.abs(lateral - r.lat);
+      if (latDist > r.halfW + RAMP_FEATHER) continue;
+      // lateral weight: 1 on the deck, ramping to 0 across the feather band
+      const over = latDist - r.halfW;
+      const w = over <= 0 ? 1 : 1 - over / RAMP_FEATHER;
+      // longitudinal weight: flat apron in front of the toe, then the climb
+      const t = rel <= 0 ? 0 : rel / r.len;
+      const rampY = r.baseY + t * r.rise;
+      const lift = (rampY - roadY) * w;
+      if (lift <= 0.001) continue;
+      if (roadY + lift <= y + 0.001) continue;        // a taller ramp already wins
+
+      y = roadY + lift;
+      slope = (rel <= 0 ? 0 : r.grade) * w;
+      // riding off the side of the deck is a genuine cross-slope
+      bank = over <= 0 ? 0
+        : -Math.sign(lateral - r.lat) * (rampY - roadY) / RAMP_FEATHER;
+      onRamp = rel >= 0 && w > 0.5;
+      exitSoon = onRamp && rel > r.len - 2.5;
+      grade = r.grade * w;
+    }
+    return { y, slope, bank, onRamp, exitSoon, grade };
   }
 
   // Full surface query: main loop + shortcut + ramps + zones.
   // Note: pos.y (when present) selects the deck on multi-level sections.
   // When `vel` is given, cross-leg snaps only adopt segments the mover is
   // actually heading along (chicanes run legs in opposite directions).
-  // Returns progress, lateral, ground y, direction, road state, zone fx.
+  // Returns progress, lateral, ground y, surface gradient, direction,
+  // road state and zone fx.
   surface(pos, hint = { main: -1, sc: -1 }, vel = null) {
     // ±12 samples (18m): wide enough for 40+ m/s travel per step, narrow
     // enough that hairpin legs / stacked decks don't steal the match.
@@ -351,14 +408,36 @@ export class TrackManager {
     if (this.shortcut) {
       sc = this._nearest(pos, this.shortcut.samples, hint.sc, 12);
       hint.sc = sc.idx;
+      const scS = this.shortcut.samples[sc.idx];
       const scW = this.shortcut.halfW + 4;
       const mainW = sm.width / 2 + 4;
-      if (Math.abs(sc.lat) < Math.min(Math.abs(main.lat), scW) && Math.abs(sc.lat) < mainW) {
-        if (Math.abs(sc.lat) < Math.abs(main.lat)) useShortcut = true;
+      // The chute must be claimed in THREE dimensions, not just laterally.
+      // A lateral-only test let a kart on the far side of the loop - but
+      // incidentally aligned with the chute's axis - snap onto it, which
+      // teleported its progress by hundreds of metres and its ground height
+      // by metres on alternating frames.
+      const endGap = sc.idx === 0 ? Math.min(0, sc.along)
+        : sc.idx === this.shortcut.samples.length - 1 ? Math.max(0, sc.along - this.step)
+        : 0;
+      const inSpan = Math.abs(endGap) <= SHORTCUT_END_SLACK;
+      const dy = typeof pos.y === 'number' && Number.isFinite(pos.y)
+        ? Math.abs(scS.pos.y - pos.y) : 0;
+      const nearDeck = dy <= SHORTCUT_DECK_BAND;
+      // Hysteresis: a kart already on the chute keeps it until it is clearly
+      // outside, so a racing line that straddles the mouth cannot oscillate
+      // between two surfaces (and two wildly different progress values)
+      // frame after frame.
+      const margin = hint.onSc ? SHORTCUT_HYSTERESIS : 0;
+      if (inSpan && nearDeck &&
+          Math.abs(sc.lat) < Math.min(Math.abs(main.lat) + margin, scW) &&
+          Math.abs(sc.lat) < mainW) {
+        useShortcut = true;
       }
+      hint.onSc = useShortcut;
     }
 
     let progress, lateral, dir, right, width, y, onRoad, onShoulder;
+    let slope = 0;   // d(height)/d(distance) along the road direction
     if (useShortcut) {
       const scS = this.shortcut.samples[sc.idx];
       const frac = Math.min(1, Math.max(0, (sc.idx * this.step + sc.along) / this.shortcut.len));
@@ -367,33 +446,36 @@ export class TrackManager {
       y = scS.pos.y;
       onRoad = Math.abs(lateral) <= width / 2;
       onShoulder = Math.abs(lateral) <= width / 2 + 2.2;
+      const scNext = this.shortcut.samples[Math.min(sc.idx + 1, this.shortcut.samples.length - 1)];
+      slope = (scNext.pos.y - scS.pos.y) / this.step;
     } else {
-      const frac = Math.min(1, Math.max(-1, main.along / this.step));
+      // Interpolate the road height ACROSS the sample the kart sits in,
+      // including the segment behind it. Clamping `frac` at 0 (as the
+      // original did) made the height piecewise-constant behind each
+      // sample, so every 1.5 m the ground stepped by the full inter-sample
+      // rise instead of sloping - the source of the "bump" stutter.
+      const frac = Math.min(1, Math.max(0, main.along / this.step));
       const j = (main.idx + 1) % this.n;
       const sj = this.samples[j];
       progress = ((sm.s + main.along) % this.L + this.L) % this.L;
       lateral = main.lat;
       dir = sm.dir; right = sm.right;
-      width = sm.width + (sj.width - sm.width) * Math.max(0, frac);
-      y = sm.pos.y + (sj.pos.y - sm.pos.y) * Math.max(0, frac);
+      width = sm.width + (sj.width - sm.width) * frac;
+      y = sm.pos.y + (sj.pos.y - sm.pos.y) * frac;
       onRoad = Math.abs(lateral) <= width / 2;
       onShoulder = Math.abs(lateral) <= width / 2 + 2.5;
+      slope = (sj.pos.y - sm.pos.y) / this.step;
     }
 
-    // Ramp surface overrides the road height.
-    let onRamp = false, rampExitSoon = false;
-    for (const r of this.ramps) {
-      let rel = progress - r.s0;
-      if (rel < -this.L / 2) rel += this.L;
-      if (rel > this.L / 2) rel -= this.L;
-      if (rel >= -0.5 && rel <= r.len + 0.5 && Math.abs(lateral - r.lat) <= r.halfW) {
-        const t = Math.min(1, Math.max(0, rel / r.len));
-        const rampY = r.baseY + t * r.rise;
-        if (rampY >= y - 0.05) { y = Math.max(y, rampY); onRamp = rel >= 0 && rel <= r.len; rampExitSoon = rel > r.len - 2.5; }
-      }
-    }
+    // Ramps blend continuously over the road height (see _rampAt).
+    const ramp = this._rampAt(progress, lateral, y);
+    y = ramp.y;
+    if (ramp.slope !== 0) slope = ramp.slope;
 
-    return { progress, lateral, y, dir, right, width, onRoad, onShoulder, onRamp, rampExitSoon, useShortcut,
+    return { progress, lateral, y, slope, bank: ramp.bank, dir, right, width,
+             onRoad, onShoulder,
+             onRamp: ramp.onRamp, rampExitSoon: ramp.exitSoon, rampGrade: ramp.grade,
+             useShortcut,
              fx: this.zones.length ? this._zoneFxAt(progress) : EMPTY_FX,
              hintMain: main.idx, hintSc: sc ? sc.idx : -1 };
   }
@@ -427,14 +509,21 @@ export class TrackManager {
     };
   }
 
-  startGrid() {
+  // Staggered 2-wide starting grid, front to back. `count` slots are
+  // returned (default: the lobby capacity). The original 4-kart layout is
+  // reproduced exactly by the first four slots.
+  startGrid(count = CONFIG.race.maxPlayers) {
     const L = this.L;
-    return [
-      this.placeAt(L - 7, -2.4),   // front right
-      this.placeAt(L - 7, 2.4),    // front left
-      this.placeAt(L - 12.5, -2.4),// back right
-      this.placeAt(L - 12.5, 2.4), // back left (player)
-    ];
+    const n = Math.max(1, Math.floor(count));
+    const ROW_GAP = 5.5;     // metres between grid rows
+    const LATERAL = 2.4;     // half-width offset of each column
+    const slots = [];
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / 2);
+      const lat = (i % 2 === 0 ? -1 : 1) * LATERAL;
+      slots.push(this.placeAt(L - 7 - row * ROW_GAP, lat));
+    }
+    return slots;
   }
 
   // ------------------------------------------------------------------ racing line
@@ -492,3 +581,20 @@ export class TrackManager {
 }
 
 const EMPTY_FX = Object.freeze({ wind: 0, gravMult: 1, gripMult: 1, push: 0 });
+
+// Ramp blending bands (metres). The toe apron keeps the leading edge from
+// being a vertical step; the feather band does the same for the sides.
+const RAMP_TOE = 0.75;
+const RAMP_FEATHER = 1.25;
+
+// Deck-selection cost (see _nearest). HEIGHT_WEIGHT sets how strongly an
+// altitude mismatch is punished relative to lateral distance; HEIGHT_SAT2 is
+// the squared height at which that penalty saturates.
+const HEIGHT_WEIGHT = 2.2;
+const HEIGHT_SAT2 = 9.0;   // ~3 m
+
+// A shortcut only claims a kart that is actually inside its span (metres of
+// slack past either mouth) and on its deck.
+const SHORTCUT_END_SLACK = 6.0;
+const SHORTCUT_DECK_BAND = 4.0;
+const SHORTCUT_HYSTERESIS = 1.5;   // metres of stickiness once engaged
