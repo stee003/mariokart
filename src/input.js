@@ -142,10 +142,14 @@ export class InputManager {
         cur.buttons[i] = b.pressed || b.value > 0.5;
       }
       const ax = gp.axes[0] ?? 0;
-      cur.steer = Math.abs(ax) > 0.18 ? ax : 0;
+      // Vehicle yaw is authored in a +Z-forward frame: positive steering is
+      // visually LEFT from the chase camera. Standard gamepad axes report
+      // left as negative, so convert once at the input boundary rather than
+      // inverting keyboard, d-pad and stick independently inside physics.
+      cur.steer = Math.abs(ax) > 0.18 ? -ax : 0;
       cur.throttle = (gp.buttons[7]?.value ?? 0) > 0.25 ? gp.buttons[7].value : 0;
       cur.brake = (gp.buttons[6]?.value ?? 0) > 0.25 ? gp.buttons[6].value : 0;
-      cur.steerDigital = (cur.buttons[15] ? 1 : 0) - (cur.buttons[14] ? 1 : 0);
+      cur.steerDigital = (cur.buttons[14] ? 1 : 0) - (cur.buttons[15] ? 1 : 0);
 
       const edge = (i, action) => {
         if (cur.buttons[i] && !prevButtons[i]) this._gpPressed.add(action);
@@ -167,8 +171,8 @@ export class InputManager {
     switch (action) {
       case 'throttle': return g.throttle > 0;
       case 'brake':    return g.brake > 0;
-      case 'left':     return g.steer < -0.18 || g.steerDigital < 0;
-      case 'right':    return g.steer > 0.18 || g.steerDigital > 0;
+      case 'left':     return g.steer > 0.18 || g.steerDigital > 0;
+      case 'right':    return g.steer < -0.18 || g.steerDigital < 0;
       case 'drift':    return !!g.buttons[2] || !!g.buttons[4];
       default:         return false;
     }
@@ -194,9 +198,12 @@ export class InputManager {
   // Returns a fresh snapshot of the full driving state, merging keyboard and
   // gamepad (analog where the pad provides it).
   snapshot() {
-    const kSteer = (this._kbDown('left') ? -1 : 0) + (this._kbDown('right') ? 1 : 0);
+    // In the kart's +Z-forward coordinate frame positive yaw is a visual left
+    // turn. Keep that engine convention internal while exposing ordinary
+    // controls: A/← and stick-left turn left; D/→ and stick-right turn right.
+    const kSteer = (this._kbDown('left') ? 1 : 0) + (this._kbDown('right') ? -1 : 0);
     const gp = this._gp;
-    // keyboard steer and stick steer add; either cancels the other mid-press
+    // keyboard steer and stick steer add; opposite directions cancel cleanly
     let steer = kSteer + gp.steer + gp.steerDigital;
     steer = Math.max(-1, Math.min(1, steer));
     return {

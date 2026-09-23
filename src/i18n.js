@@ -19,6 +19,13 @@ const BASE_STRINGS = {
   'menu.resume':       { en: 'Resume',                              it: 'Riprendi' },
   'menu.mode':         { en: 'Choose Game Mode',                    it: 'Scegli la modalità' },
   'menu.press':        { en: 'An original arcade kart prototype',   it: 'Un prototipo arcade di kart originale' },
+  'menu.kicker':       { en: 'Arcade Grand Prix',                   it: 'Gran Premio Arcade' },
+  'menu.command':      { en: 'Race command',                        it: 'Comando gara' },
+  'menu.startHint':    { en: 'Choose a mode and take the grid',     it: 'Scegli una modalità e parti' },
+  'menu.garageHint':   { en: 'Tune your pilot and kart',            it: 'Personalizza pilota e kart' },
+  'menu.settingsHint': { en: 'Controls, display and accessibility', it: 'Comandi, schermo e accessibilità' },
+  'menu.activeLoadout':{ en: 'Active loadout',                      it: 'Configurazione attiva' },
+  'menu.ready':        { en: 'Ready',                               it: 'Pronto' },
 
   'settings.title':    { en: 'Settings',                            it: 'Impostazioni' },
   'settings.language': { en: 'Language',                            it: 'Lingua' },

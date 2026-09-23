@@ -7,6 +7,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
+import { createRampVisual } from './terrainMesh.js';
 
 const SANDSTONES = [0xc9834e, 0xb97a45, 0xd99a5b, 0xa86f3e, 0xd18c50];
 const pick = (arr, i) => arr[i % arr.length];
@@ -191,33 +192,15 @@ export function buildEnvironment(scene, track) {
   group.add(banner);
 
   // ------------------------------------------------------------------ ramps
+  // The visible deck is sampled from the same profile as wheel collision and
+  // launch physics; see TrackManager.rampSurfaceAt().
   for (const r of track.ramps) {
-    const p0 = track.pointAt(r.s0), p1 = track.pointAt(r.s1);
-    const mk = (p, latOff, y) => {
-      const v = p.pos.clone().addScaledVector(p.right, r.lat + latOff);
-      v.y = y + 0.05;
-      return v;
-    };
-    const a = mk(p0, -r.halfW, r.baseY), b = mk(p0, r.halfW, r.baseY);
-    const c = mk(p1, r.halfW, r.baseY + r.rise), d = mk(p1, -r.halfW, r.baseY + r.rise);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z,
-      a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z,
-    ]), 3));
-    geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xd8955a, roughness: 0.9 }));
-    group.add(mesh);
-    // lip stripe
-    const lip = new THREE.Mesh(
-      new THREE.PlaneGeometry(r.halfW * 2, 1.1),
-      new THREE.MeshBasicMaterial({ color: 0xffe08a })
-    );
-    lip.rotation.x = -Math.PI / 2;
-    lip.rotation.z = yawFor(p1.dir);
-    lip.position.copy(p1.pos).addScaledVector(p1.right, r.lat);
-    lip.position.y = r.baseY + r.rise + 0.07;
-    group.add(lip);
+    group.add(createRampVisual(track, r, {
+      surface: 0xd8955a,
+      shoulder: 0xbe7845,
+      side: 0x744126,
+      stripe: 0xffe08a,
+    }));
   }
 
   // -------------------------------------------------------------- boost pads

@@ -65,7 +65,8 @@ Module conventions:
 | `main.js` | Game state machine, screen wiring, garage/settings UI, adaptive AA |
 | `race.js` | Race rules: countdown, checkpoints, laps, positions, wrong way, results |
 | `vehicle.js` | Kart physics step, vertical/road model, recovery reset, fx flags |
-| `track.js` | Spline sampling, `_nearest` (deck lock + leg hysteresis), zones/ramps/shortcut |
+| `track.js` | Spline sampling, `_nearest` (deck lock + leg hysteresis), canonical surface/ramps/shortcut |
+| `terrainMesh.js` | Visible ramp decks, shoulders and lips sampled from the canonical collision profile |
 | `ai.js` + `aiDifficulty.js` | Racing-line pursuit, drift/item use, recovery, 6 tiers |
 | `items.js`, `itemMesh.js` | 22 power-ups: rolls, projectiles, traps, shells/banas |
 | `boost.js`, `drift.js` | Boost pipeline, drift charge states + palettes |
@@ -166,22 +167,30 @@ top speed < `CONFIG.vehicle.maxSpeed × 1.55` on all 16 tracks × tiers.
   steer multiplier, boost steer retention.
 - Traction: longitudinal engine/brake forces with a grip ellipse; lateral
   friction bleeds sideways velocity (styled oversteer while drifting).
-- Vertical: `surface()` returns ground height at the kart; grounded karts
-  track it with a **bounded lift** (0.22 m/step) so seams never catapult the
-  kart; falling ⇢ airborne with slightly floaty gravity (`air.gravity 16.5`).
-  Air-steer authority scales down with speed loss; tricks need ≥ 0.12 s air.
+- Vertical: `surface()` returns ground height and its longitudinal/lateral
+  gradient at the kart. Grounded karts follow it with distance/rate-bounded
+  lift and drop budgets, so seams never catapult the kart; falling ⇢ airborne
+  with slightly floaty gravity (`air.gravity 16.5`). Air-steer authority scales
+  down with speed loss; tricks need ≥ 0.12 s air.
+- `TrackManager.rampSurfaceAt()` is the single ramp profile for contact height,
+  collision gradient, rendered deck/shoulders/lip and shadow placement. Ramp
+  launch speed projects that gradient onto the kart's actual velocity, so a
+  diagonal shoulder crossing cannot receive a full centre-deck jump.
 - Ramp launches reuse the smoothed `climbRate` history (≤ 14 m/s); non-ramp
-  lip pops are capped so crests stay playful instead of orbital.
+  lip pops are capped so crests stay playful instead of orbital. In flight the
+  visual pitch follows the integrated vertical velocity; position, attitude,
+  pilot reaction and suspension are fixed-step interpolated together.
 - Recovery: off-track beyond shoulders for `recovery.offTrackLimit`, outside
   `hardLimitLateral`, fallen below surface, or stuck (`stuckTime` at low speed
   with throttle) → rescue reset to last checkpoint with i-frames.
 
 `TrackManager._nearest` matches kart → spline sample with a ±12-sample hint
-window, a 2.2 m **deck-lock band** (multi-level tracks pick the deck nearest
-the kart's altitude), and leg-cross hysteresis: falls back to a full scan only
-when the kart is provably off the clipped band, and only adopts a different
-arc when it is inside another segment's road **and** aligned with the kart's
-velocity (prevents chicane/hairpin leg theft).
+window, a continuous saturating altitude cost (multi-level tracks prefer the
+deck nearest the kart's altitude without a hard-band flip), and leg-cross
+hysteresis: it falls back to a full scan only when the kart is provably off
+the local road, and only adopts a different arc when it is inside another
+segment's road **and** aligned with the kart's velocity (prevents
+chicane/hairpin leg theft).
 
 ---
 

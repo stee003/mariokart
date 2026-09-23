@@ -10,6 +10,7 @@
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
+import { createRampVisual } from './terrainMesh.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const yawFor = (dir) => Math.atan2(dir.x, dir.z);
@@ -214,28 +215,12 @@ function buildFinishAndBanner(group, track, bannerText) {
 
 function buildRampsAndPads(group, track, state) {
   for (const r of track.ramps) {
-    const p0 = track.pointAt(r.s0), p1 = track.pointAt(r.s1);
-    const mk = (p, latOff, y) => {
-      const v = p.pos.clone().addScaledVector(p.right, r.lat + latOff);
-      v.y = y + 0.05;
-      return v;
-    };
-    const a = mk(p0, -r.halfW, r.baseY), b = mk(p0, r.halfW, r.baseY);
-    const c = mk(p1, r.halfW, r.baseY + r.rise), d = mk(p1, -r.halfW, r.baseY + r.rise);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z,
-      a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z,
-    ]), 3));
-    geo.computeVertexNormals();
-    group.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6a7080, roughness: 0.85 })));
-    const lip = new THREE.Mesh(new THREE.PlaneGeometry(r.halfW * 2, 1.1),
-      new THREE.MeshBasicMaterial({ color: 0xffe08a }));
-    lip.rotation.x = -Math.PI / 2;
-    lip.rotation.z = yawFor(p1.dir);
-    lip.position.copy(p1.pos).addScaledVector(p1.right, r.lat);
-    lip.position.y = r.baseY + r.rise + 0.07;
-    group.add(lip);
+    group.add(createRampVisual(track, r, {
+      surface: 0x747b8d,
+      shoulder: 0x5c6270,
+      side: 0x373b46,
+      stripe: 0xffe08a,
+    }));
   }
 
   const padCanvas = document.createElement('canvas');

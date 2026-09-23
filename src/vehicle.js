@@ -31,6 +31,7 @@ export class VehicleController {
     this.vy = 0;
     this.grounded = true;
     this.onRamp = false;
+    this.rampContact = 0;          // 0..1 share of the canonical ramp profile
     this.steer = 0;                       // smoothed analog steer
     this.fSpeed = 0;                      // signed forward speed (cached)
     this.latSpeed = 0;                    // cached lateral speed
@@ -73,6 +74,10 @@ export class VehicleController {
     this.hint = { main: -1, sc: -1 };
     this.surf = this.track.surface(this.pos, this.hint);
     this.y = this.surf.y;
+    this.pos.y = this.y;
+    this.onRamp = !!this.surf.onRamp;
+    this.rampContact = this.surf.rampContact || 0;
+    this._prevOnSc = this.surf.useShortcut;
     this.drift.cancel();
     this.boost.cancel();
     this.resetTimer = 0;
@@ -115,6 +120,8 @@ export class VehicleController {
       this.resetTimer -= dt;
       this.surf = track.surface(this.pos, this.hint);
       this.y = this.surf.y;
+      this.pos.y = this.y;
+      this._updateAttitude(dt, this.surf);
       return;
     }
 
@@ -265,10 +272,14 @@ export class VehicleController {
           this.y = prevY + Math.min(delta, maxLift);
           const implicit = (this.y - prevY) / dt;
           this.vy = implicit;
-          // Remember the climb rate so leaving a ramp lip launches the kart.
-          // Ramps report their true grade, so the launch speed is derived
-          // from geometry * speed rather than from a sampled step height.
-          const geometric = Math.max(0, surf.slope ?? 0) * Math.hypot(this.vel.x, this.vel.z);
+          // Remember the REAL rate at which the contact point climbs. The
+          // surface gradient is projected onto velocity, so crossing a ramp
+          // diagonally (or along its feathered shoulder) cannot receive the
+          // full centre-deck launch impulse. This is the same gradient used
+          // to pose the chassis below.
+          const geometric = Math.max(0,
+            (surf.slope ?? 0) * this.vel.dot(surf.dir)
+            + (surf.bank ?? 0) * this.vel.dot(surf.right));
           const climb = Math.max(implicit, geometric);
           if (climb > 0.3) this.climbRate = Math.min(this.climbRate * 0.4 + climb * 0.6, T.maxClimbRate);
           else this.climbRate = Math.max(0, this.climbRate - T.liftDecay * dt);
@@ -299,10 +310,14 @@ export class VehicleController {
           this.grounded = false;
           this.airTime = 0;
           if (this.climbRate > 0.6) {
-            // full launch off actual ramps; soft lip-pop elsewhere
+            // Launch strength follows how much of the physical ramp the wheels
+            // were touching on the previous step. The visible feathered edge
+            // therefore produces a proportionally smaller hop than the deck.
+            const contact = this.onRamp ? Math.max(0, Math.min(1, this.rampContact)) : 0;
+            const launchMult = 1 + (CONFIG.boost.rampLaunchMult - 1) * contact;
             this.vy = Math.min(
-              this.climbRate * (this.onRamp ? CONFIG.boost.rampLaunchMult : 1.0),
-              this.onRamp ? 99 : 8.5);
+              this.climbRate * launchMult,
+              contact > 0.01 ? 99 : 8.5);
             this.fx.launch = this.vy;
           } else {
             // rolled off an edge: carry the slope's descent, not a hard 0
@@ -311,7 +326,10 @@ export class VehicleController {
           this.climbRate = 0;
         }
       }
-      if (this.grounded) this.onRamp = surf.onRamp;
+      if (this.grounded) {
+        this.onRamp = surf.onRamp;
+        this.rampContact = surf.rampContact || 0;
+      }
     } else {
       this.airTime += dt;
       this.vy -= CONFIG.air.gravity * dt * (surf.fx?.gravMult ?? 1);   // low-gravity zones
@@ -337,6 +355,7 @@ export class VehicleController {
         this.y = groundY;
         this.grounded = true;
         this.onRamp = surf.onRamp;
+        this.rampContact = surf.rampContact || 0;
         const airTime = this.airTime;
         this.airTime = 0;
         this.lastFallSpeed = Math.max(0, fall);
@@ -358,6 +377,11 @@ export class VehicleController {
       }
     }
 
+    // Keep the public transform coherent with the vertical solver. Several
+    // systems (items, particles, ghosts and rendering) read pos as a complete
+    // world-space point; leaving pos.y one physics step behind made jump FX
+    // visibly detach from the kart and terrain.
+    this.pos.y = this.y;
     this._prevOnSc = surf.useShortcut;
 
     // --- terrain attitude (visual, but simulated on the fixed step) ----------
@@ -404,10 +428,12 @@ export class VehicleController {
   // should roll (and snaps back the instant the kart straightens up) -
   // that mismatch is what made the animations look broken on elevation
   // changes. Airborne karts level out instead of freezing at the last
-  // ground angle.
+  // ground angle. In flight it follows the ballistic velocity instead of
+  // playing a disconnected, fixed "jump" pose.
   _updateAttitude(dt, surf) {
     const T = CONFIG.terrain;
     let targetPitch = 0, targetRoll = 0;
+    let pitchSmooth = T.pitchSmooth;
     if (this.grounded && surf) {
       const slope = surf.slope || 0;      // rise per metre along road dir
       const bank = surf.bank || 0;        // rise per metre along road right
@@ -421,8 +447,14 @@ export class VehicleController {
       const gradSide = slope * -rightDot + bank * alongDot;
       targetPitch = Math.max(-T.maxPitch, Math.min(T.maxPitch, Math.atan(gradFwd)));
       targetRoll = Math.max(-T.maxRoll, Math.min(T.maxRoll, Math.atan(gradSide)));
+    } else if (!this.grounded) {
+      // Positive terrainPitch means nose-up. atan2 ties the visual arc to the
+      // same vy/gravity integration that determines the physical jump.
+      targetPitch = Math.max(-T.maxPitch, Math.min(T.maxPitch,
+        Math.atan2(this.vy, Math.max(5, this.speedAbs))));
+      pitchSmooth = T.airPitchSmooth;
     }
-    this.terrainPitch += (targetPitch - this.terrainPitch) * Math.min(1, T.pitchSmooth * dt);
+    this.terrainPitch += (targetPitch - this.terrainPitch) * Math.min(1, pitchSmooth * dt);
     this.terrainRoll += (targetRoll - this.terrainRoll) * Math.min(1, T.rollSmooth * dt);
 
     // suspension: compress on impact, recover smoothly

@@ -67,6 +67,10 @@ export class TrackManager {
       });
     }
     this.n = n;
+    // Actual arc-length spacing (slightly above the 1.5m target because n is
+    // integral). Height interpolation and gradient queries must use the same
+    // value or visual pitch slowly diverges from the rendered ribbon.
+    this.sampleStep = this.L / n;
   }
 
   _widthAtU(u, widths) {
@@ -101,7 +105,8 @@ export class TrackManager {
       pos.y = near.pos.y - 0.15;
       samples.push({ pos, dir: dir.clone(), right: right.clone(), s: t * len, width: sc.halfW * 2 });
     }
-    this.shortcut = { samples, entryProg, exitProg, halfW: sc.halfW, len };
+    this.shortcut = { samples, entryProg, exitProg, halfW: sc.halfW, len,
+      sampleStep: len / Math.max(1, m - 1) };
   }
 
   // ---------------------------------------------------------------- features
@@ -203,6 +208,11 @@ export class TrackManager {
     return {
       s0, s1: s0 + len, lat, halfW, rise, baseY: p.pos.y, dir: p.dir.clone(), len,
       grade: rise / Math.max(0.001, len),   // rise per metre travelled
+      // Public profile dimensions consumed by the visual mesh builder. They
+      // deliberately live on the physical ramp instead of being duplicated
+      // as renderer magic numbers.
+      toe: RAMP_TOE,
+      feather: RAMP_FEATHER,
     };
   }
 
@@ -283,6 +293,9 @@ export class TrackManager {
       dir: a.dir.clone().lerp(b.dir, t).normalize(),
       right: a.right.clone().lerp(b.right, t).normalize(),
       width: a.width + (b.width - a.width) * t,
+      // Centreline rise per metre. Exposing it here lets procedural terrain
+      // meshes and collision sample precisely the same base surface.
+      slope: (b.pos.y - a.pos.y) / this.sampleStep,
       idx: i,
     };
   }
@@ -331,50 +344,94 @@ export class TrackManager {
   }
 
   // ----------------------------------------------------------------- ramps
-  // Ramp contribution at (progress, lateral) over a base road height.
+  // Sample ONE authored ramp. This is the canonical ramp profile used by
+  // collision, chassis attitude and the rendered mesh (terrainMesh.js).
+  // Keeping those three consumers on this function is important: a separate
+  // decorative quad used to be only an approximation of the collision plane,
+  // so the wheels could climb or launch beside/above what the player saw.
   //
-  // Both the longitudinal and the lateral profile are CONTINUOUS: the deck
-  // fades in over a short toe apron and fades back to the road across a
-  // feather band outside the ramp's half-width. Without the feather a kart
-  // weaving across the ramp edge teleported up/down by the full rise in a
-  // single step, which the vehicle then read as "the ground fell away" and
-  // punted it into the air - the bump/elevation glitch.
-  //
-  // Returns { y, slope, bank, onRamp, exitSoon, grade } where
-  //   slope = d(height)/d(distance) along the track direction
-  //   bank  = d(height)/d(distance) laterally (positive = rising to +right)
-  //   grade = the ramp's own rise-per-metre (used for launch velocity)
-  _rampAt(progress, lateral, roadY) {
-    let y = roadY, slope = 0, bank = 0;
-    let onRamp = false, exitSoon = false, grade = 0;
-    for (const r of this.ramps) {
-      let rel = progress - r.s0;
-      if (rel < -this.L / 2) rel += this.L;
-      if (rel > this.L / 2) rel -= this.L;
-      if (rel < -RAMP_TOE || rel > r.len) continue;
+  // `roadY` and `roadSlope` may be supplied by surface() to avoid repeating
+  // its centreline lookup. Render-time callers can omit them.
+  rampSurfaceAt(r, progress, lateral, roadY = null, roadSlope = null) {
+    if (!r) return null;
+    let rel = progress - r.s0;
+    if (rel < -this.L / 2) rel += this.L;
+    if (rel > this.L / 2) rel -= this.L;
 
-      const latDist = Math.abs(lateral - r.lat);
-      if (latDist > r.halfW + RAMP_FEATHER) continue;
-      // lateral weight: 1 on the deck, ramping to 0 across the feather band
-      const over = latDist - r.halfW;
-      const w = over <= 0 ? 1 : 1 - over / RAMP_FEATHER;
-      // longitudinal weight: flat apron in front of the toe, then the climb
-      const t = rel <= 0 ? 0 : rel / r.len;
-      const rampY = r.baseY + t * r.rise;
-      const lift = (rampY - roadY) * w;
-      if (lift <= 0.001) continue;
-      if (roadY + lift <= y + 0.001) continue;        // a taller ramp already wins
+    const road = (roadY === null || roadSlope === null) ? this.pointAt(progress) : null;
+    if (roadY === null) roadY = road.pos.y;
+    if (roadSlope === null) roadSlope = road.slope;
 
-      y = roadY + lift;
-      slope = (rel <= 0 ? 0 : r.grade) * w;
-      // riding off the side of the deck is a genuine cross-slope
-      bank = over <= 0 ? 0
-        : -Math.sign(lateral - r.lat) * (rampY - roadY) / RAMP_FEATHER;
-      onRamp = rel >= 0 && w > 0.5;
-      exitSoon = onRamp && rel > r.len - 2.5;
-      grade = r.grade * w;
+    const outside = {
+      y: roadY, slope: roadSlope, bank: 0, onRamp: false,
+      exitSoon: false, grade: 0, contact: 0, active: false,
+    };
+    if (rel < -RAMP_TOE || rel > r.len) return outside;
+
+    const latOffset = lateral - r.lat;
+    const latDist = Math.abs(latOffset);
+    if (latDist > r.halfW + RAMP_FEATHER) return outside;
+
+    // The solid deck has contact=1. Its visible shoulders and collision both
+    // feather to the road over exactly RAMP_FEATHER metres.
+    const over = latDist - r.halfW;
+    const lateralWeight = over <= 0 ? 1 : 1 - over / RAMP_FEATHER;
+
+    let targetY, targetSlope, toeWeight = 1, toeWeightSlope = 0;
+    if (rel < 0) {
+      // Smooth, flat apron into the ramp toe. This matters on an already
+      // sloped road, where snapping straight to baseY would create a tiny
+      // invisible step immediately before the visible ramp.
+      const u = Math.max(0, Math.min(1, (rel + RAMP_TOE) / RAMP_TOE));
+      toeWeight = u * u * (3 - 2 * u);                  // smoothstep
+      toeWeightSlope = (6 * u * (1 - u)) / RAMP_TOE;  // d(weight)/d(metre)
+      targetY = r.baseY;
+      targetSlope = 0;
+    } else {
+      targetY = r.baseY + (rel / r.len) * r.rise;
+      targetSlope = r.grade;
     }
-    return { y, slope, bank, onRamp, exitSoon, grade };
+
+    const contact = lateralWeight * toeWeight;
+    const gap = targetY - roadY;
+    const lift = Math.max(0, gap * contact);
+    if (lift <= 0.0001 || contact <= 0.0001) return outside;
+
+    // Exact gradient of y = roadY + (targetY-roadY) * contact. In particular,
+    // the shoulder retains the road's share of the slope. The old `grade*w`
+    // approximation did not, so the visible chassis angle disagreed with the
+    // height its wheels were actually following near a ramp edge.
+    const slope = roadSlope * (1 - contact)
+      + targetSlope * contact
+      + gap * toeWeightSlope * lateralWeight;
+    const bank = over <= 0 ? 0
+      : -Math.sign(latOffset) * gap * toeWeight / RAMP_FEATHER;
+    const onRamp = rel >= 0 && contact > 0.01;
+
+    return {
+      y: roadY + lift,
+      slope,
+      bank,
+      onRamp,
+      exitSoon: onRamp && rel > r.len - 2.5,
+      grade: r.grade * contact,
+      contact,
+      active: true,
+    };
+  }
+
+  // Ramp contribution at (progress, lateral) over the base road. When ramps
+  // overlap, the upper physical surface wins and carries its exact gradient.
+  _rampAt(progress, lateral, roadY, roadSlope) {
+    let best = {
+      y: roadY, slope: roadSlope, bank: 0, onRamp: false,
+      exitSoon: false, grade: 0, contact: 0, active: false,
+    };
+    for (const r of this.ramps) {
+      const sample = this.rampSurfaceAt(r, progress, lateral, roadY, roadSlope);
+      if (sample.active && sample.y > best.y + 0.0001) best = sample;
+    }
+    return best;
   }
 
   // Full surface query: main loop + shortcut + ramps + zones.
@@ -440,21 +497,21 @@ export class TrackManager {
     let slope = 0;   // d(height)/d(distance) along the road direction
     if (useShortcut) {
       const scS = this.shortcut.samples[sc.idx];
-      const frac = Math.min(1, Math.max(0, (sc.idx * this.step + sc.along) / this.shortcut.len));
+      const frac = Math.min(1, Math.max(0, (scS.s + sc.along) / this.shortcut.len));
       progress = this.shortcut.entryProg + frac * (this.shortcut.exitProg - this.shortcut.entryProg);
       lateral = sc.lat; dir = scS.dir; right = scS.right; width = scS.width;
       y = scS.pos.y;
       onRoad = Math.abs(lateral) <= width / 2;
       onShoulder = Math.abs(lateral) <= width / 2 + 2.2;
       const scNext = this.shortcut.samples[Math.min(sc.idx + 1, this.shortcut.samples.length - 1)];
-      slope = (scNext.pos.y - scS.pos.y) / this.step;
+      slope = (scNext.pos.y - scS.pos.y) / this.shortcut.sampleStep;
     } else {
       // Interpolate the road height ACROSS the sample the kart sits in,
       // including the segment behind it. Clamping `frac` at 0 (as the
       // original did) made the height piecewise-constant behind each
       // sample, so every 1.5 m the ground stepped by the full inter-sample
       // rise instead of sloping - the source of the "bump" stutter.
-      const frac = Math.min(1, Math.max(0, main.along / this.step));
+      const frac = Math.min(1, Math.max(0, main.along / this.sampleStep));
       const j = (main.idx + 1) % this.n;
       const sj = this.samples[j];
       progress = ((sm.s + main.along) % this.L + this.L) % this.L;
@@ -464,17 +521,20 @@ export class TrackManager {
       y = sm.pos.y + (sj.pos.y - sm.pos.y) * frac;
       onRoad = Math.abs(lateral) <= width / 2;
       onShoulder = Math.abs(lateral) <= width / 2 + 2.5;
-      slope = (sj.pos.y - sm.pos.y) / this.step;
+      slope = (sj.pos.y - sm.pos.y) / this.sampleStep;
     }
 
-    // Ramps blend continuously over the road height (see _rampAt).
-    const ramp = this._rampAt(progress, lateral, y);
+    // Ramps blend continuously over the road height (see _rampAt). The
+    // returned slope/bank are derivatives of this exact same height profile,
+    // not a parallel approximation used only by animation.
+    const ramp = this._rampAt(progress, lateral, y, slope);
     y = ramp.y;
-    if (ramp.slope !== 0) slope = ramp.slope;
+    slope = ramp.slope;
 
     return { progress, lateral, y, slope, bank: ramp.bank, dir, right, width,
              onRoad, onShoulder,
-             onRamp: ramp.onRamp, rampExitSoon: ramp.exitSoon, rampGrade: ramp.grade,
+             onRamp: ramp.onRamp, rampExitSoon: ramp.exitSoon,
+             rampGrade: ramp.grade, rampContact: ramp.contact,
              useShortcut,
              fx: this.zones.length ? this._zoneFxAt(progress) : EMPTY_FX,
              hintMain: main.idx, hintSc: sc ? sc.idx : -1 };
