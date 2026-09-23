@@ -7,6 +7,14 @@
 // Shared construction (road ribbon, curbs, ramps, pads, finish, banner,
 // tunnels, obstacle meshes) is theme-parameterized; props give each
 // environment its own silhouette and environmental storytelling.
+//
+// 2026 flagship pass: the desert / forest / city kits (used ONLY by
+// Ashfall Run, Verdant Loop, Neon Cascade and Skyline Helix) were rebuilt
+// with layered "road2" surfacing, richer skies (stars, sun/moon discs),
+// per-theme tunnel variants, denser hand-tuned prop sets and per-track
+// FLAVORS - signature landmarks (volcano, mega-tower, billboards, forest
+// landmarks) with their own animation hooks. Every other theme's kit and
+// prop set is byte-for-byte the previous release.
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
@@ -17,17 +25,37 @@ const yawFor = (dir) => Math.atan2(dir.x, dir.z);
 
 // ----------------------------------------------------------------------------
 // Theme kits: colors + prop builders. Prop fns receive (group, track, rnd).
+//
+// "road2" kits get the layered flagship road: sand/shoulder apron, solid
+// edge lines, brighter centre dash and (for city) a wet-asphalt sheen.
+// "stars" adds a starfield; "sunDisc"/"moon" add a horizon light disc.
 // ----------------------------------------------------------------------------
 const KITS = {
   forest: {
-    sky: ['#7fb2e0', '#bfe0d8', '#e8f0c8', '#d8e8b0'], fog: [0xbcd8b4, 140, 620],
-    hemi: [0xd8f0d0, 0x4a6a3a, 1.0], sun: [0xfff4d8, 1.15], sunPos: [120, 220, -60],
-    ground: 0x6a8f4a, road: [0.42, 0.44, 0.4], curbA: 0xe8e0d0, curbB: 0x4f9e4f,
+    sky: ['#5f9fd8', '#93c6e4', '#cfe8c4', '#f0f4c8'], fog: [0xc9dcb8, 150, 640],
+    hemi: [0xeef8d8, 0x3c5c30, 1.05], sun: [0xfff6cf, 1.25], sunPos: [150, 230, -80],
+    ground: 0x578a42, road: [0.44, 0.41, 0.35], curbA: 0xe8e0c8, curbB: 0x3f8e4f,
+    shoulder: [0.33, 0.47, 0.26], edge: [0.93, 0.9, 0.78], road2: true,
+    sunDisc: { color: 0xfff2c8, r: 36, pos: [430, 300, -540] },
+    banner: { bg: '#2e4a2a', stripe: '#66e8a0', text: '#eaffdc' },
   },
   city: {
-    sky: ['#0a0e2a', '#1a2050', '#3a2a6a', '#8a4a8a'], fog: [0x241a3a, 130, 560],
-    hemi: [0x8a8aff, 0x1a1030, 0.8], sun: [0xa0b0ff, 0.8], sunPos: [-140, 180, 120],
-    ground: 0x14141e, road: [0.3, 0.31, 0.36], curbA: 0xff5df1, curbB: 0x2fd8c8,
+    sky: ['#04061a', '#0d1230', '#2a1c4e', '#58306e'], fog: [0x141026, 140, 620],
+    hemi: [0x9a8aff, 0x0e0a1c, 0.85], sun: [0x8a9aff, 0.7], sunPos: [-120, 160, 140],
+    ground: 0x0d0f18, road: [0.2, 0.21, 0.26], curbA: 0xff5df1, curbB: 0x2fd8c8,
+    shoulder: [0.05, 0.06, 0.1], edge: [0.85, 0.9, 1.0], road2: true, wet: true,
+    stars: true,
+    moon: { color: 0xdde4ff, r: 30, pos: [-520, 320, 260] },
+    banner: { bg: '#101426', stripe: '#2fd8c8', text: '#9affff' },
+  },
+  // Volcanic ash field - Ashfall Run (the only non-flagship desert track).
+  desert: {
+    sky: ['#241f33', '#453650', '#7d5254', '#c98a58'], fog: [0x4a3c46, 130, 560],
+    hemi: [0xd8b090, 0x2a2028, 0.95], sun: [0xffc088, 1.05], sunPos: [-160, 120, -140],
+    ground: 0x574a44, road: [0.34, 0.31, 0.31], curbA: 0xff8a3c, curbB: 0x332c2e,
+    shoulder: [0.28, 0.24, 0.22], edge: [0.9, 0.82, 0.68], road2: true,
+    sunDisc: { color: 0xffb070, r: 46, pos: [-560, 170, -480] },
+    banner: { bg: '#2a1c1e', stripe: '#ff8a3c', text: '#ffd9a8' },
   },
   mountain: {
     sky: ['#6aa0d8', '#a8c8e8', '#e8e0d0', '#f0e8d8'], fog: [0xc8d4e0, 150, 680],
@@ -118,13 +146,13 @@ function ribbon(group, samples, offsetA, offsetB, colorFn, closed, roadMat, yOff
 
 function buildSky(scene, group, kit) {
   const c = document.createElement('canvas');
-  c.width = 4; c.height = 256;
+  c.width = 4; c.height = 512;
   const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 0, 256);
+  const grad = g.createLinearGradient(0, 0, 0, 512);
   kit.sky.forEach((col, i) => grad.addColorStop(i / (kit.sky.length - 1), col));
-  g.fillStyle = grad; g.fillRect(0, 0, 4, 256);
+  g.fillStyle = grad; g.fillRect(0, 0, 4, 512);
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(860, 20, 14),
+    new THREE.SphereGeometry(860, 24, 16),
     new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), side: THREE.BackSide, fog: false })
   );
   group.add(sky);
@@ -134,15 +162,73 @@ function buildSky(scene, group, kit) {
   sun.position.set(...kit.sunPos);
   scene.add(sun);
   scene.add(new THREE.AmbientLight(kit.hemi[0], 0.18));
+
+  // optional starfield (night kits)
+  if (kit.stars) {
+    const n = 700;
+    const arr = new Float32Array(n * 3);
+    let s = 424242;
+    const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < n; i++) {
+      const a = r() * Math.PI * 2, b = Math.acos(2 * r() - 1);
+      const rad = 760 + r() * 80;
+      arr[i * 3] = rad * Math.sin(b) * Math.cos(a);
+      arr[i * 3 + 1] = Math.abs(rad * Math.cos(b)) * 0.8 + 20;
+      arr[i * 3 + 2] = rad * Math.sin(b) * Math.sin(a);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    group.add(new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xdde4ff, size: 1.5, sizeAttenuation: false, fog: false,
+    })));
+  }
+
+  // optional sun/moon disc + halo on the horizon
+  const discSpec = kit.sunDisc || kit.moon;
+  if (discSpec) {
+    const v = new THREE.Vector3(...discSpec.pos).normalize().multiplyScalar(800);
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(discSpec.r, 24),
+      new THREE.MeshBasicMaterial({ color: discSpec.color, fog: false })
+    );
+    disc.position.copy(v);
+    disc.lookAt(0, 0, 0);
+    group.add(disc);
+    const halo = new THREE.Mesh(
+      new THREE.CircleGeometry(discSpec.r * 2.1, 24),
+      new THREE.MeshBasicMaterial({ color: discSpec.color, fog: false, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    halo.position.copy(v).multiplyScalar(0.999);
+    halo.lookAt(0, 0, 0);
+    group.add(halo);
+  }
   return sun;
 }
 
 function buildRoad(group, track, kit) {
-  const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  const roadMat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: kit.wet ? 0.58 : 0.95,
+    metalness: kit.wet ? 0.12 : 0.0,
+  });
   const S = track.samples;
   const hw = (sm) => sm.width / 2;
   const noise = (i) => (((i * 7919) % 13) / 13 - 0.5) * 0.05;
   const base = kit.road;
+
+  // shoulder apron (flagship road2 kits)
+  if (kit.road2) {
+    const apronMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+    for (const sideSign of [1, -1]) {
+      ribbon(group, S,
+        (sm) => sideSign * (hw(sm) + 2.8),
+        (sm) => sideSign * (hw(sm) - 1.25),
+        (sm, i) => {
+          const v = 1 + noise(i + 2);
+          return [kit.shoulder[0] * v, kit.shoulder[1] * v, kit.shoulder[2] * v];
+        }, true, apronMat, 0.015);
+    }
+  }
 
   ribbon(group, S, (sm) => hw(sm) - 1.25, (sm) => -(hw(sm) - 1.25), (sm, i) => {
     const v = 1 + noise(i);
@@ -158,9 +244,21 @@ function buildRoad(group, track, kit) {
         return [c.r, c.g, c.b];
       }, true, roadMat, 0.03);
   }
+  // solid edge lines just inside the curbs (flagship road2 kits)
+  if (kit.road2) {
+    const lineMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    for (const sideSign of [1, -1]) {
+      ribbon(group, S,
+        (sm) => sideSign * (hw(sm) - 1.6),
+        (sm) => sideSign * (hw(sm) - 1.3),
+        () => [kit.edge[0], kit.edge[1], kit.edge[2]], true, lineMat, 0.035);
+    }
+  }
   ribbon(group, S, () => 0.22, () => -0.22, (sm) => {
     const on = Math.floor(sm.s / 5) % 2 === 0;
-    return on ? [0.95, 0.92, 0.82] : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.6];
+    return on
+      ? (kit.road2 ? [0.98, 0.96, 0.9] : [0.95, 0.92, 0.82])
+      : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.6];
   }, true, roadMat, 0.035);
 
   if (track.shortcut) {
@@ -172,7 +270,7 @@ function buildRoad(group, track, kit) {
   }
 }
 
-function buildFinishAndBanner(group, track, bannerText) {
+function buildFinishAndBanner(group, track, bannerText, kit) {
   const fin = track.pointAt(0.2);
   const checker = document.createElement('canvas');
   checker.width = 128; checker.height = 32;
@@ -197,13 +295,35 @@ function buildFinishAndBanner(group, track, bannerText) {
     pole.position.y += 3.6;
     group.add(pole);
   }
+  const ban = kit && kit.banner;
   const bc = document.createElement('canvas');
-  bc.width = 512; bc.height = 96;
+  bc.width = ban ? 1024 : 512;
+  bc.height = ban ? 128 : 96;
   const bg = bc.getContext('2d');
-  bg.fillStyle = '#20304a'; bg.fillRect(0, 0, 512, 96);
-  bg.fillStyle = '#8ae0ff'; bg.font = '900 48px "Trebuchet MS", sans-serif';
-  bg.textAlign = 'center'; bg.textBaseline = 'middle';
-  bg.fillText(bannerText, 256, 50);
+  if (ban) {
+    // flagship two-tone banner with diagonal stripes
+    bg.fillStyle = ban.bg; bg.fillRect(0, 0, 1024, 128);
+    bg.fillStyle = ban.stripe;
+    for (let x = -60; x < 1080; x += 120) {
+      bg.beginPath();
+      bg.moveTo(x, 128); bg.lineTo(x + 34, 0); bg.lineTo(x + 56, 0); bg.lineTo(x + 22, 128);
+      bg.closePath(); bg.fill();
+    }
+    bg.fillStyle = ban.stripe;
+    bg.fillRect(0, 0, 1024, 6);
+    bg.fillRect(0, 122, 1024, 6);
+    bg.font = '900 76px "Trebuchet MS", sans-serif';
+    bg.textAlign = 'center'; bg.textBaseline = 'middle';
+    bg.fillStyle = 'rgba(0,0,0,0.55)';
+    bg.fillText(bannerText, 515, 68);
+    bg.fillStyle = ban.text;
+    bg.fillText(bannerText, 512, 64);
+  } else {
+    bg.fillStyle = '#20304a'; bg.fillRect(0, 0, 512, 96);
+    bg.fillStyle = '#8ae0ff'; bg.font = '900 48px "Trebuchet MS", sans-serif';
+    bg.textAlign = 'center'; bg.textBaseline = 'middle';
+    bg.fillText(bannerText, 256, 50);
+  }
   const banner = new THREE.Mesh(
     new THREE.PlaneGeometry(fin.width + 1.6, 2.2),
     new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(bc), side: THREE.DoubleSide })
@@ -261,12 +381,14 @@ function buildRampsAndPads(group, track, state) {
   }
 }
 
-function buildTunnel(group, track, colliders, palette = 0x6a7080) {
+function buildTunnel(group, track, colliders, palette, theme, state) {
   if (!track.tunnelRange) return;
   const mat = new THREE.MeshStandardMaterial({ color: palette, roughness: 0.9, flatShading: true });
+  const mat2 = new THREE.MeshStandardMaterial({ color: (palette & 0xffffff) * 0.8, roughness: 0.9, flatShading: true });
   // adaptive arch spacing so short tunnels still get several ribs
   const span = track.tunnelRange[1] - track.tunnelRange[0];
   const step = Math.max(3, Math.min(6.5, span / 4));
+  const neonStrips = [];
   for (let s = track.tunnelRange[0]; s <= track.tunnelRange[1]; s += step) {
     const p = track.pointAt(s);
     const yaw = yawFor(p.dir);
@@ -277,6 +399,20 @@ function buildTunnel(group, track, colliders, palette = 0x6a7080) {
       pillar.rotation.y = yaw;
       group.add(pillar);
       colliders.push(new THREE.Box3().setFromObject(pillar));
+      // desert basalt ribs / forest moss cap on the pillar
+      if (theme === 'desert') {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(0.5, 8.5, 0.5), mat2);
+        rib.position.copy(pillar.position);
+        rib.position.y += 0.6;
+        rib.rotation.y = yaw;
+        group.add(rib);
+      } else if (theme === 'forest') {
+        const moss = new THREE.Mesh(new THREE.ConeGeometry(1.1, 1.4, 6),
+          new THREE.MeshStandardMaterial({ color: 0x4f8e4f, roughness: 1, flatShading: true }));
+        moss.position.copy(pillar.position);
+        moss.position.y += 4.1;
+        group.add(moss);
+      }
     }
     const beam = new THREE.Mesh(new THREE.BoxGeometry(p.width + 4.4, 1.5, 1.9), mat);
     beam.position.copy(p.pos);
@@ -284,6 +420,35 @@ function buildTunnel(group, track, colliders, palette = 0x6a7080) {
     beam.rotation.y = yaw;
     group.add(beam);
     colliders.push(new THREE.Box3().setFromObject(beam));
+    if (theme === 'forest') {
+      // leafy canopy crowning each arch
+      for (const k of [-0.5, 0, 0.5]) {
+        const leaf = new THREE.Mesh(new THREE.ConeGeometry(2.2, 2.6, 7),
+          new THREE.MeshStandardMaterial({ color: k === 0 ? 0x57a85a : 0x3f8e4f, roughness: 1, flatShading: true }));
+        leaf.position.copy(beam.position);
+        leaf.position.addScaledVector(p.right, k * (p.width / 2));
+        leaf.position.y += 1.4;
+        group.add(leaf);
+      }
+    } else if (theme === 'city') {
+      // under-beam neon strip, colour-cycled at runtime
+      const stripMat = new THREE.MeshBasicMaterial({ color: 0x2fd8c8, transparent: true, opacity: 0.95 });
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(p.width + 3.6, 0.28, 0.28), stripMat);
+      strip.position.copy(beam.position);
+      strip.position.y -= 0.9;
+      strip.rotation.y = yaw;
+      group.add(strip);
+      neonStrips.push(stripMat);
+    }
+  }
+  if (neonStrips.length) {
+    const a = new THREE.Color(0x2fd8c8), b = new THREE.Color(0xff5df1), tmp = new THREE.Color();
+    state.extras.push((dt, time) => {
+      for (let i = 0; i < neonStrips.length; i++) {
+        tmp.copy(a).lerp(b, 0.5 + 0.5 * Math.sin(time * 0.9 + i * 0.8));
+        neonStrips[i].color.copy(tmp);
+      }
+    });
   }
 }
 
@@ -357,47 +522,236 @@ function buildObstacles(group, track, state) {
 const PROPS = {
   forest(group, track, rnd) {
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2e, roughness: 1 });
-    const leafMats = [0x3f8e4f, 0x57a85a, 0x2f7a3f].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true }));
-    for (let i = 0; i < 60; i++) {
+    const trunkMat2 = new THREE.MeshStandardMaterial({ color: 0x5c4228, roughness: 1 });
+    const leafMats = [0x3f8e4f, 0x57a85a, 0x2f7a3f, 0x6cb863].map((c) =>
+      new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true }));
+    // two-storey trees: tapered crown + lower skirt reads as a real canopy
+    for (let i = 0; i < 44; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 8 + rnd() * 30;
+      const dist = p.width / 2 + 8 + rnd() * 34;
       const t = new THREE.Group();
       const h = 3 + rnd() * 4;
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, h, 6), trunkMat);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, h, 6), rnd() > 0.5 ? trunkMat : trunkMat2);
       trunk.position.y = h / 2;
       t.add(trunk);
-      const crown = new THREE.Mesh(new THREE.ConeGeometry(1.8 + rnd() * 1.6, 3.5 + rnd() * 3, 7), leafMats[i % 3]);
-      crown.position.y = h + 1.4;
+      const r1 = 2.2 + rnd() * 1.8;
+      const skirt = new THREE.Mesh(new THREE.ConeGeometry(r1 * 1.25, 2.6 + rnd() * 1.6, 7), leafMats[i % 4]);
+      skirt.position.y = h + 0.8;
+      t.add(skirt);
+      const crown = new THREE.Mesh(new THREE.ConeGeometry(r1 * 0.8, 3 + rnd() * 2.4, 7), leafMats[(i + 2) % 4]);
+      crown.position.y = h + 2.6 + rnd() * 1.2;
       t.add(crown);
       t.position.copy(p.pos).addScaledVector(p.right, side * dist);
       group.add(t);
     }
-  },
-  city(group, track, rnd) {
-    const towerMat = new THREE.MeshStandardMaterial({ color: 0x181a28, roughness: 0.6, metalness: 0.3 });
-    const winMat = new THREE.MeshBasicMaterial({ color: 0x8ae0ff });
-    const winMat2 = new THREE.MeshBasicMaterial({ color: 0xff5df1 });
-    for (let i = 0; i < 40; i++) {
+    // mushroom ring (instanced stem + cap)
+    const N = 34;
+    const stemGeo = new THREE.CylinderGeometry(0.09, 0.13, 0.5, 5);
+    const capGeo = new THREE.ConeGeometry(0.42, 0.34, 7);
+    const stemMat = new THREE.MeshStandardMaterial({ color: 0xf0ead8, roughness: 0.9 });
+    const capMats = [0xe05a4a, 0xe8a04a, 0xd8d8e8].map((c) =>
+      new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, flatShading: true }));
+    const stems = new THREE.InstancedMesh(stemGeo, stemMat, N);
+    const caps = new THREE.InstancedMesh(capGeo, capMats[0], N);
+    const d = new THREE.Object3D();
+    for (let i = 0; i < N; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 14 + rnd() * 40;
+      const dist = p.width / 2 + 5 + rnd() * 16;
+      const sz = 0.7 + rnd() * 1.1;
+      d.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      d.position.y += 0.25 * sz;
+      d.scale.setScalar(sz);
+      d.rotation.set(0, rnd() * Math.PI * 2, 0);
+      d.updateMatrix();
+      stems.setMatrixAt(i, d.matrix);
+      d.position.y += 0.42 * sz;
+      d.updateMatrix();
+      caps.setMatrixAt(i, d.matrix);
+      caps.setColorAt(i, new THREE.Color(capMats[i % 3].color));
+    }
+    stems.instanceMatrix.needsUpdate = true;
+    caps.instanceMatrix.needsUpdate = true;
+    group.add(stems, caps);
+    // ferns + wildflowers (instanced)
+    const fernGeo = new THREE.ConeGeometry(0.5, 0.9, 6);
+    const fernMat = new THREE.MeshStandardMaterial({ color: 0x4fa85f, roughness: 1, flatShading: true });
+    const N_F = 36;
+    const ferns = new THREE.InstancedMesh(fernGeo, fernMat, N_F);
+    const flGeo = new THREE.SphereGeometry(0.16, 6, 5);
+    const flMats = [0xffd24a, 0xff8aa0, 0xffffff, 0xc88aff].map((c) => new THREE.Color(c));
+    const flowers = new THREE.InstancedMesh(flGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }), N_F + 14);
+    for (let i = 0; i < N_F; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 4 + rnd() * 20;
+      d.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      d.position.y += 0.3;
+      d.scale.set(0.7 + rnd() * 0.9, 0.7 + rnd() * 0.9, 0.7 + rnd() * 0.9);
+      d.rotation.set(0, rnd() * Math.PI * 2, 0);
+      d.updateMatrix();
+      ferns.setMatrixAt(i, d.matrix);
+    }
+    ferns.instanceMatrix.needsUpdate = true;
+    group.add(ferns);
+    for (let i = 0; i < N_F + 14; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 3 + rnd() * 24;
+      d.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      d.position.y += 0.35;
+      d.scale.setScalar(0.8 + rnd() * 0.8);
+      d.rotation.set(0, 0, 0);
+      d.updateMatrix();
+      flowers.setMatrixAt(i, d.matrix);
+      flowers.setColorAt(i, flMats[Math.floor(rnd() * 4)]);
+    }
+    flowers.instanceMatrix.needsUpdate = true;
+    group.add(flowers);
+  },
+  city(group, track, rnd) {
+    // shared lit-window facade texture (deterministic per build)
+    const wc = document.createElement('canvas');
+    wc.width = 96; wc.height = 192;
+    const wg = wc.getContext('2d');
+    wg.fillStyle = '#070910'; wg.fillRect(0, 0, 96, 192);
+    const winCols = ['#8ae0ff', '#ffd24a', '#ff5df1', '#40f0e0', '#a8b0c0'];
+    let ws = 987654321;
+    const wr = () => (ws = (ws * 16807) % 2147483647) / 2147483647;
+    for (let row = 0; row < 22; row++) {
+      for (let col = 0; col < 9; col++) {
+        const lit = wr() < 0.42;
+        wg.fillStyle = lit ? winCols[Math.floor(wr() * winCols.length)] : '#10131e';
+        wg.fillRect(col * 10 + 2, row * 8 + 2, 6, 5);
+      }
+    }
+    const winTex = new THREE.CanvasTexture(wc);
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0x14162a, roughness: 0.6, metalness: 0.35 });
+    const neonCols = [0xff5df1, 0x2fd8c8, 0x4aa8ff, 0xffd24a];
+    const neonMats = neonCols.map((c) => new THREE.MeshBasicMaterial({ color: c }));
+    for (let i = 0; i < 42; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 14 + rnd() * 44;
       const h = 14 + rnd() * 46;
       const w = 5 + rnd() * 8;
-      const tower = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), towerMat);
-      tower.position.copy(p.pos).addScaledVector(p.right, side * dist);
-      tower.position.y += h / 2;
-      group.add(tower);
-      for (let r = 0; r < 5; r++) {
-        const win = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.7, 0.7), rnd() > 0.5 ? winMat : winMat2);
-        win.position.copy(tower.position);
-        win.position.y = 3 + r * (h / 5.5);
-        win.position.x -= side * (w / 2 + 0.05);
-        win.rotation.y = Math.atan2(p.right.x, p.right.z) + (side > 0 ? Math.PI : 0);
-        group.add(win);
+      // tower rotated so local +Z = road-right: road-facing facades then sit
+      // at exact, constant local offsets instead of arbitrary world angles
+      const tw = new THREE.Group();
+      tw.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      tw.position.y += h / 2;
+      tw.rotation.y = yawFor(p.right);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), towerMat);
+      tw.add(body);
+      // lit window facades on the road-facing side and one flank
+      const fz = side > 0 ? -1 : 1;
+      const win1 = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.82, h * 0.94),
+        new THREE.MeshBasicMaterial({ map: winTex }));
+      win1.position.set(0, 0, fz * (w / 2 + 0.06));
+      if (fz < 0) win1.rotation.y = Math.PI;
+      tw.add(win1);
+      const win2 = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.82, h * 0.94),
+        new THREE.MeshBasicMaterial({ map: winTex }));
+      win2.position.set((rnd() > 0.5 ? 1 : -1) * (w / 2 + 0.06), 0, 0);
+      win2.rotation.y = (rnd() > 0.5 ? 1 : -1) * Math.PI / 2;
+      tw.add(win2);
+      group.add(tw);
+      // neon edge strip + antenna
+      const nm = neonMats[Math.floor(rnd() * neonMats.length)];
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.3, h, 0.3), nm);
+      strip.position.set(fz * (w / 2 + 0.15) * 0.86, 0, fz * (w / 2 + 0.15) * 0.5);
+      tw.add(strip);
+      if (rnd() > 0.45) {
+        const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 6 + rnd() * 6, 5), towerMat);
+        ant.position.y = h / 2 + 3;
+        tw.add(ant);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 5), neonMats[2]);
+        tip.position.y = h / 2 + 6;
+        tw.add(tip);
       }
+    }
+  },
+  // Volcanic ash field for Ashfall Run: obsidian spires, basalt columns,
+  // ash mounds and glowing lava cracks.
+  desert(group, track, rnd) {
+    const spireMat = new THREE.MeshStandardMaterial({ color: 0x1c1a20, roughness: 0.85, flatShading: true });
+    const basaltMat = new THREE.MeshStandardMaterial({ color: 0x2e2a30, roughness: 0.95, flatShading: true });
+    const ashMat = new THREE.MeshStandardMaterial({ color: 0x6a5f5c, roughness: 1 });
+    // obsidian spires
+    for (let i = 0; i < 26; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 9 + rnd() * 30;
+      const h = 5 + rnd() * 12;
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(1.2 + rnd() * 2.2, h, 5), spireMat);
+      spire.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      spire.position.y = p.pos.y + h / 2 - 1;
+      spire.rotation.z = (rnd() - 0.5) * 0.24;
+      spire.rotation.y = rnd() * Math.PI;
+      group.add(spire);
+    }
+    // basalt column field (instanced hex columns)
+    const colGeo = new THREE.CylinderGeometry(0.9, 1.3, 1, 6);
+    const N_C = 30;
+    const cols = new THREE.InstancedMesh(colGeo, basaltMat, N_C);
+    const d = new THREE.Object3D();
+    for (let i = 0; i < N_C; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 12 + rnd() * 34;
+      const h = 3 + rnd() * 7;
+      d.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      d.position.y = p.pos.y + h / 2 - 0.8;
+      d.scale.set(0.7 + rnd() * 0.9, h, 0.7 + rnd() * 0.9);
+      d.rotation.set(0, rnd() * Math.PI, 0);
+      d.updateMatrix();
+      cols.setMatrixAt(i, d.matrix);
+    }
+    cols.instanceMatrix.needsUpdate = true;
+    group.add(cols);
+    // ash mounds (instanced flattened spheres)
+    const moundGeo = new THREE.SphereGeometry(1, 8, 6);
+    const N_M = 22;
+    const mounds = new THREE.InstancedMesh(moundGeo, ashMat, N_M);
+    for (let i = 0; i < N_M; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 8 + rnd() * 30;
+      const r = 4 + rnd() * 9;
+      d.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      d.position.y = p.pos.y - r * 0.22;
+      d.scale.set(r, r * 0.3, r * 0.8);
+      d.rotation.set(0, rnd() * Math.PI, 0);
+      d.updateMatrix();
+      mounds.setMatrixAt(i, d.matrix);
+    }
+    mounds.instanceMatrix.needsUpdate = true;
+    group.add(mounds);
+    // glowing lava cracks hugging the road
+    const crackMat = new THREE.MeshBasicMaterial({
+      color: 0xff5d1a, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    for (let i = 0; i < 10; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 3 + rnd() * 6;
+      const crack = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 7 + rnd() * 8), crackMat);
+      crack.rotation.x = -Math.PI / 2;
+      crack.rotation.z = Math.atan2(-p.dir.z, p.dir.x) + (rnd() - 0.5) * 0.4;
+      crack.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      crack.position.y += 0.06;
+      group.add(crack);
     }
   },
   mountain(group, track, rnd) {
@@ -629,6 +983,407 @@ const PROPS = {
 };
 
 // ----------------------------------------------------------------------------
+// Per-track FLAVORS - signature landmarks for the four flagship themed
+// circuits. Receive (group, track, rnd, state, colliders); animated parts
+// register update fns on state.extras.
+// ----------------------------------------------------------------------------
+function makeSignTexture(text, colorHex) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#05060c'; g.fillRect(0, 0, 256, 128);
+  g.fillStyle = colorHex;
+  g.fillRect(0, 0, 256, 10); g.fillRect(0, 118, 256, 10);
+  g.fillRect(0, 0, 10, 128); g.fillRect(246, 0, 10, 128);
+  g.fillStyle = colorHex;
+  g.fillRect(0, 26, 256, 4); g.fillRect(0, 98, 256, 4);
+  g.font = '900 62px "Trebuchet MS", sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, 128, 64);
+  return new THREE.CanvasTexture(c);
+}
+
+const FLAVORS = {
+  // ----------------------------------------------------------- ashfall_run
+  ashfall_run(group, track, rnd, state, colliders) {
+    const p0 = track.pointAt(track.L * 0.7);
+    const vx = p0.pos.x + p0.right.x * 130;
+    const vz = p0.pos.z + p0.right.z * 130;
+    // distant volcano with glowing crater + rising smoke
+    const volc = new THREE.Mesh(new THREE.ConeGeometry(75, 115, 9),
+      new THREE.MeshStandardMaterial({ color: 0x241c1e, roughness: 1, flatShading: true }));
+    volc.position.set(vx, 57, vz);
+    group.add(volc);
+    const crater = new THREE.Mesh(new THREE.CircleGeometry(24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xff6a20, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+    crater.rotation.x = -Math.PI / 2;
+    crater.position.set(vx, 112, vz);
+    group.add(crater);
+    const smokes = [];
+    for (let i = 0; i < 5; i++) {
+      const smMat = new THREE.MeshStandardMaterial({ color: 0x3a3238, transparent: true, opacity: 0.55, flatShading: true });
+      const sm = new THREE.Mesh(new THREE.SphereGeometry(8 + i * 2.4, 7, 6), smMat);
+      sm.position.set(vx, 122 + i * 13, vz);
+      group.add(sm);
+      smokes.push({ m: sm, y0: 122 + i * 13, ph: rnd() * 6, x0: vx });
+    }
+    state.extras.push((dt, time) => {
+      const pulse = 0.75 + Math.sin(time * 1.4) * 0.25;
+      crater.material.opacity = 0.6 + pulse * 0.35;
+      crater.scale.setScalar(0.9 + pulse * 0.15);
+      for (const sm of smokes) {
+        sm.m.position.y = sm.y0 + ((time * 3 + sm.ph * 10) % 55);
+        sm.m.position.x = sm.x0 + Math.sin(time * 0.4 + sm.ph) * 6;
+        const f = (sm.m.position.y - sm.y0) / 55;
+        sm.m.material.opacity = 0.55 * (1 - f);
+        sm.m.scale.setScalar(1 + f * 0.8);
+      }
+    });
+
+    // obsidian gate over the start straight
+    const gateAt = track.pointAt(track.L * 0.045);
+    const gHalf = gateAt.width / 2 + 3.5;
+    const obsMat = new THREE.MeshStandardMaterial({ color: 0x1c1a22, roughness: 0.85, flatShading: true });
+    const runeMat = new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.9 });
+    for (const side of [1, -1]) {
+      const col = new THREE.Mesh(new THREE.BoxGeometry(2.4, 15, 2.4), obsMat);
+      col.position.copy(gateAt.pos).addScaledVector(gateAt.right, side * gHalf);
+      col.position.y += 7.5;
+      group.add(col);
+      colliders.push(new THREE.Box3().setFromObject(col));
+      const rune = new THREE.Mesh(new THREE.BoxGeometry(0.5, 9, 0.5), runeMat);
+      rune.position.copy(col.position);
+      rune.position.x -= gateAt.right.x * side * 1.3;
+      rune.position.z -= gateAt.right.z * side * 1.3;
+      group.add(rune);
+    }
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(gHalf * 2 + 3, 2.6, 3.2), obsMat);
+    lintel.position.copy(gateAt.pos);
+    lintel.position.y += 15.6;
+    lintel.rotation.y = yawFor(gateAt.dir);
+    group.add(lintel);
+    colliders.push(new THREE.Box3().setFromObject(lintel));
+
+    // ember vents with flickering flames
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x221e24, roughness: 1, flatShading: true });
+    const vents = [];
+    const fracs = [0.09, 0.2, 0.33, 0.47, 0.58, 0.72, 0.83, 0.93];
+    for (let i = 0; i < fracs.length; i++) {
+      const p = track.pointAt(track.L * fracs[i]);
+      const side = i % 2 === 0 ? 1 : -1;
+      const dist = p.width / 2 + 7 + rnd() * 5;
+      const base = p.pos.clone().addScaledVector(p.right, side * dist);
+      const v = new THREE.Group();
+      for (let k = 0; k < 5; k++) {
+        const a = (k / 5) * Math.PI * 2 + rnd();
+        const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45 + rnd() * 0.4, 0), rockMat);
+        rk.position.set(Math.cos(a) * 1.4, 0.3, Math.sin(a) * 1.4);
+        v.add(rk);
+      }
+      const flameMat = new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(1.1, 3.2, 7), flameMat);
+      flame.position.y = 1.9;
+      v.add(flame);
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 6), flameMat);
+      core.position.y = 0.7;
+      v.add(core);
+      v.position.copy(base);
+      group.add(v);
+      vents.push({ flame, core, ph: rnd() * 6 });
+    }
+    state.extras.push((dt, time) => {
+      for (const v of vents) {
+        const f = 0.75 + Math.sin(time * 3.2 + v.ph) * 0.3;
+        v.flame.scale.set(1, f, 1);
+        v.flame.material.opacity = 0.55 + 0.3 * f;
+        v.core.scale.setScalar(f);
+      }
+    });
+  },
+
+  // ---------------------------------------------------------- verdant_loop
+  verdant_loop(group, track, rnd, state, colliders) {
+    // giant landmark tree guarding the start
+    const tp = track.pointAt(track.L * 0.02);
+    const tPos = tp.pos.clone().addScaledVector(tp.right, -(tp.width / 2 + 15));
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4228, roughness: 1 });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 3.2, 17, 8), trunkMat);
+    trunk.position.set(tPos.x, 8.5, tPos.z);
+    group.add(trunk);
+    const canopyCols = [0x2f7a3f, 0x3f8e4f, 0x57a85a];
+    const canopy = [[12, 8, 15], [8.5, 6.5, 20.5], [5.5, 5.5, 25]].map(([r, h, y], i) => {
+      const c = new THREE.Mesh(new THREE.ConeGeometry(r, h, 8),
+        new THREE.MeshStandardMaterial({ color: canopyCols[i], roughness: 1, flatShading: true }));
+      c.position.set(tPos.x, y, tPos.z);
+      group.add(c);
+      return c;
+    });
+    colliders.push(new THREE.Box3().setFromCenterAndSize(
+      new THREE.Vector3(tPos.x, 12, tPos.z), new THREE.Vector3(26, 30, 26)));
+    state.extras.push((dt, time) => {
+      // gentle breeze sway
+      for (let i = 0; i < canopy.length; i++) {
+        canopy[i].rotation.z = Math.sin(time * 0.8 + i) * 0.02 * (i + 1);
+      }
+    });
+
+    // sunlit pond with reeds
+    const pp = track.pointAt(track.L * 0.86);
+    const pond = pp.pos.clone().addScaledVector(pp.right, pp.width / 2 + 17);
+    const rim = new THREE.Mesh(new THREE.CircleGeometry(15, 20),
+      new THREE.MeshStandardMaterial({ color: 0xc8b080, roughness: 1 }));
+    rim.rotation.x = -Math.PI / 2;
+    rim.position.set(pond.x, -0.38, pond.z);
+    group.add(rim);
+    const water = new THREE.Mesh(new THREE.CircleGeometry(13, 20),
+      new THREE.MeshStandardMaterial({ color: 0x4a90b8, roughness: 0.25, transparent: true, opacity: 0.88 }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(pond.x, -0.3, pond.z);
+    group.add(water);
+    const reedMat = new THREE.MeshStandardMaterial({ color: 0x4f8e4f, roughness: 1 });
+    for (let i = 0; i < 14; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = 11 + rnd() * 3.4;
+      const h = 1.6 + rnd() * 1.1;
+      const reed = new THREE.Mesh(new THREE.ConeGeometry(0.09, h, 4), reedMat);
+      reed.position.set(pond.x + Math.cos(a) * r, -0.3 + h / 2, pond.z + Math.sin(a) * r);
+      reed.rotation.z = (rnd() - 0.5) * 0.2;
+      group.add(reed);
+    }
+    const lilyMat = new THREE.MeshStandardMaterial({ color: 0x6aae5a, roughness: 0.9 });
+    for (let i = 0; i < 5; i++) {
+      const a = rnd() * Math.PI * 2;
+      const lily = new THREE.Mesh(new THREE.CircleGeometry(0.55, 8), lilyMat);
+      lily.rotation.x = -Math.PI / 2;
+      lily.position.set(pond.x + Math.cos(a) * (2 + rnd() * 7), -0.28, pond.z + Math.sin(a) * (2 + rnd() * 7));
+      group.add(lily);
+    }
+
+    // drifting fireflies
+    const N_FLY = 80;
+    const flyPos = new Float32Array(N_FLY * 3);
+    const flyBase = [];
+    for (let i = 0; i < N_FLY; i++) {
+      const s = rnd() * track.L;
+      const p = track.pointAt(s);
+      const side = rnd() > 0.5 ? 1 : -1;
+      const dist = p.width / 2 + 3 + rnd() * 13;
+      const x = p.pos.x + p.right.x * side * dist;
+      const y = p.pos.y + 0.8 + rnd() * 3.8;
+      const z = p.pos.z + p.right.z * side * dist;
+      flyPos[i * 3] = x; flyPos[i * 3 + 1] = y; flyPos[i * 3 + 2] = z;
+      flyBase.push({ x, y, z, ph: rnd() * 6, sp: 0.25 + rnd() * 0.4 });
+    }
+    const flyGeo = new THREE.BufferGeometry();
+    flyGeo.setAttribute('position', new THREE.BufferAttribute(flyPos, 3));
+    const flies = new THREE.Points(flyGeo, new THREE.PointsMaterial({
+      color: 0xd8ff8a, size: 0.5, sizeAttenuation: true,
+      transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    group.add(flies);
+    state.extras.push((dt, time) => {
+      const arr = flyGeo.attributes.position.array;
+      for (let i = 0; i < N_FLY; i++) {
+        const b = flyBase[i];
+        arr[i * 3] = b.x + Math.sin(time * b.sp + b.ph) * 1.8;
+        arr[i * 3 + 1] = b.y + Math.sin(time * b.sp * 1.6 + b.ph * 2) * 0.7;
+        arr[i * 3 + 2] = b.z + Math.cos(time * b.sp * 0.8 + b.ph) * 1.8;
+      }
+      flyGeo.attributes.position.needsUpdate = true;
+    });
+
+    // volumetric light shafts through the canopy
+    const shaftMat = new THREE.MeshBasicMaterial({
+      color: 0xfff8c0, transparent: true, opacity: 0.055,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    for (let i = 0; i < 6; i++) {
+      const sp = track.pointAt(track.L * (0.02 + i * 0.012));
+      const shaft = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 34), shaftMat);
+      shaft.position.copy(sp.pos).addScaledVector(sp.right, (rnd() - 0.5) * sp.width);
+      shaft.position.y += 15;
+      shaft.rotation.y = yawFor(sp.dir) + (rnd() - 0.5) * 0.6;
+      shaft.rotation.z = 0.45;
+      group.add(shaft);
+    }
+  },
+
+  // ---------------------------------------------------------- neon_cascade
+  neon_cascade(group, track, rnd, state, colliders) {
+    // neon billboards marching along the rooftops
+    const WORDS = ['CASCADE', 'VOLT', 'NOVA', 'PULSE', 'APEX', 'ZEN', 'DRIFT'];
+    const HUES = [0.86, 0.48, 0.13, 0.33, 0.58, 0.06, 0.75];
+    const signs = [];
+    for (let i = 0; i < WORDS.length; i++) {
+      const p = track.pointAt(track.L * (0.07 + i * 0.135));
+      const side = i % 2 === 0 ? 1 : -1;
+      const dist = p.width / 2 + 5.5;
+      const base = p.pos.clone().addScaledVector(p.right, side * dist);
+      const hgt = 6.5 + rnd() * 3;
+      const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2e3e, roughness: 0.6, metalness: 0.5 });
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, hgt, 6), poleMat);
+      pole.position.set(base.x, p.pos.y + hgt / 2, base.z);
+      group.add(pole);
+      const tex = makeSignTexture(WORDS[i], '#' + new THREE.Color().setHSL(HUES[i], 0.95, 0.6).getHexString());
+      const signMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.96, side: THREE.DoubleSide });
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 2.4), signMat);
+      sign.position.set(base.x, p.pos.y + hgt + 1.1, base.z);
+      sign.rotation.y = yawFor(p.dir);
+      group.add(sign);
+      signs.push({ mat: signMat, hue: HUES[i], dir: i % 3 === 0 ? -1 : 1 });
+    }
+    state.extras.push((dt, time) => {
+      for (const sgn of signs) {
+        const pulse = 0.75 + Math.sin(time * 2.2 + sgn.hue * 12) * 0.25;
+        sgn.mat.opacity = 0.75 + pulse * 0.25;
+      }
+    });
+
+    // colour-cycling neon tube arches over key straights
+    const archCols = [0x2fd8c8, 0xff5df1, 0xffd24a];
+    const arches = [];
+    for (let i = 0; i < 3; i++) {
+      const p = track.pointAt(track.L * (0.26 + i * 0.18));
+      const archMat = new THREE.MeshBasicMaterial({ color: archCols[i], transparent: true, opacity: 0.9 });
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(p.width / 2 + 2.4, 0.22, 6, 22, Math.PI), archMat);
+      arch.position.copy(p.pos);
+      arch.position.y += 0.15;
+      arch.rotation.y = yawFor(p.dir);
+      group.add(arch);
+      arches.push({ mat: archMat, hue: i / 3 });
+    }
+    state.extras.push((dt, time) => {
+      for (const a of arches) {
+        a.mat.color.setHSL((a.hue + time * 0.03) % 1, 0.95, 0.6);
+      }
+    });
+
+    // light "cascade" falls from the high rooftop section
+    const fallMat = new THREE.MeshBasicMaterial({
+      color: 0x2fd8c8, transparent: true, opacity: 0.16,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    for (let i = 0; i < 4; i++) {
+      const p = track.pointAt(track.L * (0.52 + i * 0.03));
+      const side = i % 2 === 0 ? 1 : -1;
+      const fall = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 42), fallMat);
+      fall.position.copy(p.pos).addScaledVector(p.right, side * (p.width / 2 + 9 + rnd() * 6));
+      fall.position.y += 21;
+      fall.rotation.y = yawFor(p.dir) + Math.PI / 2;
+      group.add(fall);
+    }
+
+    // distant mega-skyline for depth
+    const farMat = new THREE.MeshStandardMaterial({ color: 0x0a0c16, roughness: 0.7, metalness: 0.3 });
+    for (let i = 0; i < 12; i++) {
+      const p = track.pointAt(track.L * ((i * 0.083 + 0.03) % 1));
+      const side = i % 2 === 0 ? 1 : -1;
+      const dist = p.width / 2 + 70 + rnd() * 70;
+      const h = 50 + rnd() * 60;
+      const w = 9 + rnd() * 8;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), farMat);
+      tower.position.copy(p.pos).addScaledVector(p.right, side * dist);
+      tower.position.y += h / 2;
+      group.add(tower);
+    }
+  },
+
+  // --------------------------------------------------------- skyline_helix
+  skyline_helix(group, track, rnd, state, colliders) {
+    const cx = 0, cz = 10;   // helix axis: the track spirals around here
+    // the mega-tower
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0x141828, roughness: 0.6, metalness: 0.4, flatShading: true });
+    const towerMat2 = new THREE.MeshStandardMaterial({ color: 0x1a2036, roughness: 0.6, metalness: 0.4, flatShading: true });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(20, 27, 62, 8), towerMat);
+    base.position.set(cx, 31, cz);
+    group.add(base);
+    const mid = new THREE.Mesh(new THREE.CylinderGeometry(15, 19, 42, 8), towerMat2);
+    mid.position.set(cx, 83, cz);
+    group.add(mid);
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(10, 13.5, 32, 8), towerMat);
+    top.position.set(cx, 119, cz);
+    group.add(top);
+    // neon edge strips on the base corners
+    const edgeMat = new THREE.MeshBasicMaterial({ color: 0x2fd8c8 });
+    for (const [ex, ez] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.7, 60, 0.7), edgeMat);
+      strip.position.set(cx + ex * 18.5, 30, cz + ez * 18.5);
+      group.add(strip);
+    }
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xff5df1 });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(17.5, 0.35, 6, 28), ringMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(cx, 105, cz);
+    group.add(ring);
+    // antenna + blinking beacon
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.9, 26, 6), towerMat2);
+    antenna.position.set(cx, 145, cz);
+    group.add(antenna);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff4a4a, transparent: true, opacity: 0.95 });
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(1.3, 10, 8), beaconMat);
+    beacon.position.set(cx, 159, cz);
+    group.add(beacon);
+    // rotating radar dish
+    const dishPivot = new THREE.Group();
+    dishPivot.position.set(cx + 16, 96, cz);
+    const dish = new THREE.Mesh(new THREE.SphereGeometry(4.5, 10, 8),
+      new THREE.MeshStandardMaterial({ color: 0x3a4258, roughness: 0.4, metalness: 0.6 }));
+    dish.scale.y = 0.22;
+    dish.position.x = 3;
+    dishPivot.add(dish);
+    const dishMast = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 6, 6), towerMat2);
+    dishMast.position.y = -2.5;
+    dishPivot.add(dishMast);
+    group.add(dishPivot);
+    colliders.push(new THREE.Box3().setFromCenterAndSize(
+      new THREE.Vector3(cx, 75, cz), new THREE.Vector3(58, 160, 58)));
+
+    // the light-helix wrapping the tower
+    const helixPts = [];
+    const turns = 2.6 * Math.PI * 1.35;
+    for (let i = 0; i <= 110; i++) {
+      const t = i / 110;
+      const a = -0.5 * Math.PI + turns * t;
+      helixPts.push(new THREE.Vector3(Math.cos(a) * 215, -2 + 57 * t, Math.sin(a) * 215));
+    }
+    const helixCurve = new THREE.CatmullRomCurve3(helixPts);
+    const helixMat = new THREE.MeshBasicMaterial({
+      color: 0xff5df1, transparent: true, opacity: 0.7,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const helix = new THREE.Mesh(new THREE.TubeGeometry(helixCurve, 150, 0.7, 6), helixMat);
+    const helixGroup = new THREE.Group();
+    helixGroup.position.set(cx, 0, cz);
+    helixGroup.add(helix);   // helix pts are already centred on the origin
+    group.add(helixGroup);
+
+    // distant super-tall towers
+    const farMat = new THREE.MeshStandardMaterial({ color: 0x0a0c16, roughness: 0.7, metalness: 0.3 });
+    const farNeon = new THREE.MeshBasicMaterial({ color: 0x4aa8ff });
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.4;
+      const r = 330 + rnd() * 150;
+      const h = 95 + rnd() * 75;
+      const w = 12 + rnd() * 10;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), farMat);
+      tower.position.set(cx + Math.cos(a) * r, h / 2, cz + Math.sin(a) * r);
+      group.add(tower);
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.8, h * 0.9, 0.8), farNeon);
+      strip.position.set(cx + Math.cos(a) * (r + w / 2), h / 2, cz + Math.sin(a) * (r + w / 2));
+      group.add(strip);
+    }
+
+    state.extras.push((dt, time) => {
+      beaconMat.opacity = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * 2.4));
+      beacon.scale.setScalar(0.9 + 0.25 * (0.5 + 0.5 * Math.sin(time * 2.4)));
+      dishPivot.rotation.y = time * 0.5;
+      helixGroup.rotation.y = time * 0.03;
+      helixMat.opacity = 0.55 + 0.2 * Math.sin(time * 1.2);
+    });
+  },
+};
+
+// ----------------------------------------------------------------------------
 // Main entry
 // ----------------------------------------------------------------------------
 export function buildThemedEnvironment(scene, track, bannerName) {
@@ -636,7 +1391,7 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   const kit = KITS[theme] || KITS.ruins;
   const group = new THREE.Group();
   const colliders = [];
-  const state = { padMaterials: [], obstacleMeshes: [], extras: {} };
+  const state = { padMaterials: [], obstacleMeshes: [], extras: [] };
   scene.add(group);
 
   const sunLight = buildSky(scene, group, kit);
@@ -654,14 +1409,18 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   }
 
   buildRoad(group, track, kit);
-  buildFinishAndBanner(group, track, bannerName || 'SUNFORGE');
+  buildFinishAndBanner(group, track, bannerName || 'SUNFORGE', kit);
   buildRampsAndPads(group, track, state);
-  buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : 0x565e6c);
+  buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
   buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
   buildObstacles(group, track, state);
 
   const rnd = seeded(track.def.musicSeed * 1013 + 7);
   (PROPS[theme] || PROPS.ruins)(group, track, rnd);
+
+  // signature landmarks for the four flagship themed circuits
+  const flavor = FLAVORS[track.def.id];
+  if (flavor) flavor(group, track, rnd, state, colliders);
 
   state.update = (dt, time) => {
     for (const { mesh, obstacle, isFlame } of state.obstacleMeshes) {
@@ -679,6 +1438,7 @@ export function buildThemedEnvironment(scene, track, bannerName) {
       const flash = Math.max(0, Math.sin(time * 1.7) * Math.sin(time * 7.3) - 0.93) * 12;
       sunLight.intensity = kit.sun[1] + flash;
     }
+    for (const fn of state.extras) fn(dt, time);
   };
 
   return { group, colliders, state };

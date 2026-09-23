@@ -270,7 +270,9 @@ class Game {
     this.hud.setMinimapTrack(this.track);
 
     trackPlayed(this.save, def.id);
-    this.music.setTheme(def.musicSeed, def.theme);
+    // Tracks shipping a hand-arranged soundtrack (def.music) opt into the
+    // rich engine; every other track keeps the seeded generator.
+    this.music.setTheme(def.musicSeed, def.theme, def.music || null);
   }
 
   // AI takes the front slots; the player always starts from the back slot
