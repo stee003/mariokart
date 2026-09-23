@@ -10,7 +10,7 @@ One pilot (*Ember the Dustfox*), one kart (*Dune Blazer MK-1*), one track
 ## Play
 
 ```bash
-npm start            # serves on http://localhost:8000
+node server.mjs            # serves on http://localhost:8000
 ```
 
 `npm start` runs a tiny zero-dependency Node static server (`server.mjs`), so it
