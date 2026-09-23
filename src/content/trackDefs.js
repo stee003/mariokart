@@ -186,7 +186,8 @@ export const TRACK_DEFS = [
       { x: -130, y: 18, z: 130, w: 12 },
       { x: -185, y: 15, z: 0,   w: 12.5 },
       { x: -135, y: 10, z: -95, w: 13 },
-      { x: -40,  y: 5,  z: -60, w: 15 },    // inner dive-down
+      { x: -85,  y: 7,  z: -78, w: 14 },    // helix rim
+      { x: -45,  y: 5,  z: -40, w: 16 },    // switchback crown (dive-down)
     ],
     shortcut: { entry: 0.78, exit: 0.90, latEntry: -2.6, latExit: -3.0, halfW: 3.0 },
     ramps: [{ f: 0.35, len: 10, lat: 0, halfW: 3.5, rise: 2.1 }],

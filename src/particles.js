@@ -67,16 +67,24 @@ export class ParticlePool {
     scene.add(this.points);
     // park dead particles far away
     for (let i = 0; i < count; i++) this.positions[i * 3 + 1] = -9999;
+
+    // Accessibility knob: probability that an individual spawn is kept.
+    // Lower values keep the game readable/cheap with "Reduced effects".
+    this.density = 1;
+    this._c = new THREE.Color();     // shared temp: no per-spawn allocation
   }
 
+  setDensity(d) { this.density = Math.max(0, Math.min(1, d)); }
+
   spawn(pos, vel, { color = 0xffffff, size = 0.5, life = 0.6, gravity = 0, drag = 1.5, growth = 0 } = {}) {
+    if (this.density < 1 && Math.random() > this.density) return;
     const i = this.head;
     this.head = (this.head + 1) % this.count;
     this.positions[i * 3] = pos.x;
     this.positions[i * 3 + 1] = pos.y;
     this.positions[i * 3 + 2] = pos.z;
     this.vel[i * 3] = vel.x; this.vel[i * 3 + 1] = vel.y; this.vel[i * 3 + 2] = vel.z;
-    const c = new THREE.Color(color);
+    const c = this._c.set(color);
     this.colors[i * 3] = c.r; this.colors[i * 3 + 1] = c.g; this.colors[i * 3 + 2] = c.b;
     this.sizes[i] = size;
     this.life[i] = life; this.maxLife[i] = life;

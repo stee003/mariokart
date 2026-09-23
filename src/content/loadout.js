@@ -8,7 +8,7 @@
 // Pure data in / pure data out: fully unit-testable without Three.js.
 // ============================================================================
 
-import { getCharacter } from './characters.js';
+import { CHARACTERS, getCharacter } from './characters.js';
 import { getChassis } from './chassis.js';
 import { getWheels } from './wheels.js';
 import { getPaint, getDecal, getExhaust, getEffect } from './cosmetics.js';
@@ -25,8 +25,10 @@ export const DEFAULT_LOADOUT = {
 };
 
 export function buildLoadout(spec = {}) {
-  const s = { ...DEFAULT_LOADOUT, ...spec };
-  const character = getCharacter(s.characterId);
+  const s = { ...DEFAULT_LOADOUT, ...(spec || {}) };
+  // Unknown ids (edited/corrupted saves, removed content) fall back to the
+  // default selection instead of crashing the race boot.
+  const character = getCharacter(s.characterId) || CHARACTERS[0];
   const chassis = getChassis(s.chassisId);
   const wheels = getWheels(s.wheelId);
   const paint = getPaint(s.paintId);

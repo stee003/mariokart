@@ -161,6 +161,7 @@ export class HUDManager {
     this._lastPos = -1;
     this._lastLap = -1;
     this._lastSpeed = -1;
+    this._lastTime = '';
 
     i18n.onChange(() => this.applyLanguage());
     this.applyLanguage();
@@ -183,9 +184,12 @@ export class HUDManager {
   // ------------------------------------------------------------------ state
   showHUD(visible) { this.el.hud.classList.toggle('hidden', !visible); }
 
+  // Exactly one screen is visible at a time. Every element with the
+  // .screen class participates, so new screens (mode/track/cup select,
+  // garage...) are managed automatically when added to index.html.
   showScreen(id) {
-    for (const s of ['screen-main', 'screen-settings', 'screen-pause', 'screen-results']) {
-      document.getElementById(s).classList.toggle('hidden', s !== id);
+    for (const s of document.querySelectorAll('.screen')) {
+      s.classList.toggle('hidden', s.id !== id);
     }
   }
 
@@ -195,7 +199,7 @@ export class HUDManager {
     this.el.notify.className = '';
     this.el.countdown.className = '';
     this.el.wrongway.classList.add('hidden');
-    this._lastPos = -1; this._lastLap = -1; this._lastSpeed = -1;
+    this._lastPos = -1; this._lastLap = -1; this._lastSpeed = -1; this._lastTime = '';
   }
 
   // ------------------------------------------------------------------ updates
@@ -219,8 +223,12 @@ export class HUDManager {
       this.el.lap.textContent = this.i18n.t('hud.lapFormat', { lap: lapShown, total: st.laps });
     }
 
-    // timer
-    this.el.time.textContent = formatTime(race.raceTime);
+    // timer (cheap DOM write only when the rendered string changes)
+    const timeStr = formatTime(race.raceTime);
+    if (timeStr !== this._lastTime) {
+      this._lastTime = timeStr;
+      this.el.time.textContent = timeStr;
+    }
 
     // speed
     const kmh = Math.round(v.speedKmh);

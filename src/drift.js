@@ -8,6 +8,13 @@ import { CONFIG } from './config.js';
 const D = CONFIG.drift;
 
 export const DRIFT_COLORS = [0xcfd6df, 0x3fd2d8, 0xffb830, 0xff5df1];
+// Okabe-Ito colorblind-safe charge tiers (abundant contrast across common
+// color-vision deficiencies). Selected from the accessibility settings.
+export const DRIFT_COLORS_CB = [0xcfd6df, 0x56b4e9, 0xf0e442, 0xe69f00];
+
+export function driftColors(colorblind = false) {
+  return colorblind ? DRIFT_COLORS_CB : DRIFT_COLORS;
+}
 
 export class DriftSystem {
   // Optional per-kart mods {chargeRate, gripMult, steerMult} from loadouts.

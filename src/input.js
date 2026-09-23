@@ -1,8 +1,16 @@
 // ============================================================================
-// InputManager - keyboard state + edge-triggered action presses.
+// InputManager - keyboard + gamepad driving input with remappable keys.
+//
+// Keyboard bindings follow the standard layout below; the settings screen can
+// override any action with a single replacement key (persisted in the save).
+// Gamepads use the W3C standard mapping (Xbox/PS/Switch-Pro layout):
+//   RT throttle · LT brake/reverse · left stick / d-pad steer
+//   X or LB drift (hold) · A trick/confirm · Y power-up · B reset · START pause
+// Analog triggers feed analog throttle/brake; the left stick feeds analog
+// steering with a small dead zone. Keyboard always remains fully usable.
 // ============================================================================
 
-const KEYMAP = {
+export const DEFAULT_KEYMAP = {
   throttle: ['ArrowUp', 'KeyW'],
   brake:    ['ArrowDown', 'KeyS'],
   left:     ['ArrowLeft', 'KeyA'],
@@ -15,16 +23,61 @@ const KEYMAP = {
   confirm:  ['Enter'],
 };
 
+export const REMAPPABLE_ACTIONS = [
+  'throttle', 'brake', 'left', 'right', 'drift', 'trick', 'item', 'reset', 'pause', 'confirm',
+];
+
+const SCROLL_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
+
+// Human-readable label for a KeyboardEvent.code, used by the bindings UI.
+export function keyLabel(code) {
+  if (!code) return '—';
+  const special = {
+    ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
+    ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL',
+    AltLeft: 'L-ALT', AltRight: 'R-ALT',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    Space: 'SPACE', Escape: 'ESC', Enter: 'ENTER', Tab: 'TAB',
+    Backspace: 'BACKSPACE',
+  };
+  if (special[code]) return special[code];
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return 'NUM ' + code.slice(6);
+  return code;
+}
+
 export class InputManager {
-  constructor() {
+  constructor(save = null) {
+    this.save = save;
     this.down = new Set();
-    this.pressed = new Set();   // edge-triggered, cleared by endFrame()
+    this.pressed = new Set();      // keyboard edge-triggered set, cleared by endFrame()
     this.enabled = true;
+    this.gamepadConnected = false;
+
+    // remapping state
+    this._custom = { ...(save?.get('keys', {}) || {}) };
+    this._capture = null;           // set while a rebind is waiting for a key
+    this._rebuildMap();
+
+    // gamepad state (filled by poll())
+    this._gp = { buttons: [], steer: 0, throttle: 0, brake: 0, steerDigital: 0 };
+    this._gpPrevButtons = [];
+    this._gpPressed = new Set();    // gamepad edge-triggered actions
+
+    window.addEventListener('gamepadconnected', () => { this.gamepadConnected = true; });
+    window.addEventListener('gamepaddisconnected', () => { this.gamepadConnected = false; });
 
     window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+      if (this._capture) {
+        // rebinding in progress: Esc cancels, anything else is captured
         e.preventDefault();
+        const fn = this._capture;
+        this._capture = null;
+        fn(e.code === 'Escape' ? null : e.code);
+        return;
       }
+      if (SCROLL_KEYS.includes(e.code)) e.preventDefault();
       if (!this.down.has(e.code)) this.pressed.add(e.code);
       this.down.add(e.code);
     });
@@ -32,23 +85,125 @@ export class InputManager {
     window.addEventListener('blur', () => { this.down.clear(); });
   }
 
+  // ---------------------------------------------------------------- bindings
+  _rebuildMap() {
+    this.keymap = {};
+    for (const action of Object.keys(DEFAULT_KEYMAP)) {
+      const custom = this._custom[action];
+      this.keymap[action] = custom ? [custom] : DEFAULT_KEYMAP[action];
+    }
+  }
+
+  bindings() {
+    // action -> displayed binding code (first effective code)
+    const out = {};
+    for (const action of Object.keys(this.keymap)) out[action] = this.keymap[action][0] || null;
+    return out;
+  }
+
+  setBinding(action, code) {
+    if (!(action in DEFAULT_KEYMAP)) return;
+    if (code) this._custom[action] = code;
+    else delete this._custom[action];
+    this._rebuildMap();
+    this.save?.set('keys', { ...this._custom });
+  }
+
+  resetBindings() {
+    this._custom = {};
+    this._rebuildMap();
+    this.save?.set('keys', {});
+  }
+
+  // Called by the settings UI; the callback receives the new code (or null
+  // when the user cancelled with Esc).
+  captureNextKey(fn) { this._capture = fn; }
+  get capturing() { return !!this._capture; }
+
+  // ----------------------------------------------------------------- gamepad
+  // Poll gamepads once per frame (called from the main loop, before any
+  // snapshot()/wasPressed() reads).
+  poll() {
+    const cur = this._gp;
+    const prevButtons = this._gpPrevButtons;
+    cur.buttons = this._gpStandardButtons || (this._gpStandardButtons = []);
+    let connected = false;
+
+    const pads = (typeof navigator !== 'undefined' && navigator.getGamepads)
+      ? navigator.getGamepads()
+      : [];
+    let gp = null;
+    for (const p of pads) { if (p && p.connected) { gp = p; break; } }
+
+    if (gp) {
+      connected = true;
+      for (let i = 0; i < gp.buttons.length; i++) {
+        const b = gp.buttons[i];
+        cur.buttons[i] = b.pressed || b.value > 0.5;
+      }
+      const ax = gp.axes[0] ?? 0;
+      cur.steer = Math.abs(ax) > 0.18 ? ax : 0;
+      cur.throttle = (gp.buttons[7]?.value ?? 0) > 0.25 ? gp.buttons[7].value : 0;
+      cur.brake = (gp.buttons[6]?.value ?? 0) > 0.25 ? gp.buttons[6].value : 0;
+      cur.steerDigital = (cur.buttons[15] ? 1 : 0) - (cur.buttons[14] ? 1 : 0);
+
+      const edge = (i, action) => {
+        if (cur.buttons[i] && !prevButtons[i]) this._gpPressed.add(action);
+      };
+      for (const i of [0, 9]) edge(i, i === 0 ? 'confirm' : 'pause');
+      edge(0, 'trick');
+      edge(1, 'reset');
+      edge(3, 'item');
+    } else {
+      cur.steer = 0; cur.throttle = 0; cur.brake = 0; cur.steerDigital = 0;
+      cur.buttons.length = 0;
+    }
+    this.gamepadConnected = connected;
+    this._gpPrevButtons = cur.buttons.slice();
+  }
+
+  _gpActionDown(action) {
+    const g = this._gp;
+    switch (action) {
+      case 'throttle': return g.throttle > 0;
+      case 'brake':    return g.brake > 0;
+      case 'left':     return g.steer < -0.18 || g.steerDigital < 0;
+      case 'right':    return g.steer > 0.18 || g.steerDigital > 0;
+      case 'drift':    return !!g.buttons[2] || !!g.buttons[4];
+      default:         return false;
+    }
+  }
+
+  // ------------------------------------------------------------------ queries
   isDown(action) {
     if (!this.enabled) return false;
-    return KEYMAP[action].some((c) => this.down.has(c));
+    return this.keymap[action].some((c) => this.down.has(c)) || this._gpActionDown(action);
   }
 
   wasPressed(action) {
     if (!this.enabled) return false;
-    return KEYMAP[action].some((c) => this.pressed.has(c));
+    return this.keymap[action].some((c) => this.pressed.has(c)) || this._gpPressed.has(action);
   }
 
-  // Returns a fresh snapshot of the full driving state.
+  // Keyboard-only held check (snapshot merges gamepad separately so analog
+  // values are not double-counted through isDown()).
+  _kbDown(action) {
+    return this.keymap[action].some((c) => this.down.has(c));
+  }
+
+  // Returns a fresh snapshot of the full driving state, merging keyboard and
+  // gamepad (analog where the pad provides it).
   snapshot() {
+    const kSteer = (this._kbDown('left') ? -1 : 0) + (this._kbDown('right') ? 1 : 0);
+    const gp = this._gp;
+    // keyboard steer and stick steer add; either cancels the other mid-press
+    let steer = kSteer + gp.steer + gp.steerDigital;
+    steer = Math.max(-1, Math.min(1, steer));
     return {
-      throttle: this.isDown('throttle') ? 1 : 0,
-      brake: this.isDown('brake') ? 1 : 0,
-      steer: (this.isDown('left') ? -1 : 0) + (this.isDown('right') ? 1 : 0),
-      drift: this.isDown('drift'),
+      throttle: Math.max(this._kbDown('throttle') ? 1 : 0, gp.throttle),
+      brake: Math.max(this._kbDown('brake') ? 1 : 0, gp.brake),
+      steer,
+      drift: this._kbDown('drift') || !!this._gp.buttons[2] || !!this._gp.buttons[4],
       trick: this.wasPressed('trick'),
       item: this.wasPressed('item'),
     };
@@ -56,5 +211,6 @@ export class InputManager {
 
   endFrame() {
     this.pressed.clear();
+    this._gpPressed.clear();
   }
 }

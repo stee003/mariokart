@@ -209,8 +209,7 @@ export const CONTENT_STRINGS = {
   'settings.off': { en: 'Off', it: 'Off' },
 
   // ---------------- controls ----------------
-  'controls.help': { en: 'WASD / Arrows drive · SHIFT drift · SPACE trick · E item · R reset · ESC pause',
-                     it: 'WASD / Frecce guida · SHIFT derapata · SPACE acrobazia · E oggetto · R reset · ESC pausa' },
+  // (controls.help lives in the base dictionary - see i18n.js)
 
   // ---------------- tracks: names + what they teach + signature mechanic ----
   'track.sunforge': { en: 'Sunforge Circuit', it: 'Circuito Sunforge' },

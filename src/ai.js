@@ -62,7 +62,11 @@ export class AIController {
     if (this.liftTimer > 0) this.liftTimer -= dt;
 
     // --- steering target -----------------------------------------------------
-    const lookahead = (A.lookaheadBase + speed * A.lookaheadSpeedK) * this.dp.lookaheadMult;
+    let lookahead = (A.lookaheadBase + speed * A.lookaheadSpeedK) * this.dp.lookaheadMult;
+    // Inside sharp corners cap the lookahead so the pursuit target stays on
+    // the near arc — a far target across a hairpin flips the steer sign.
+    const curvNear = Math.abs(track.lineAt(s + lookahead * 0.5).curv);
+    if (curvNear > 0.02) lookahead = Math.min(lookahead, Math.max(3.2, 1.2 / curvNear));
     const la = track.lineAt(s + lookahead);
     const ahead = track.pointAt(s + lookahead);
 
@@ -96,6 +100,9 @@ export class AIController {
     const desired = Math.atan2(target.x - v.pos.x, target.z - v.pos.z);
     const diff = normalizeAngle(desired - v.yaw);
     input.steer = Math.max(-1, Math.min(1, diff * A.steerGain + this.wobble));
+    // Airborne: holding the same steering input over-rotates the kart during
+    // long drops (dives); players keep full air-steer, AI stays gentle.
+    if (!v.grounded) input.steer *= 0.3;
 
     // --- speed target -----------------------------------------------------
     // minimum target speed along the braking distance ahead
@@ -107,6 +114,17 @@ export class AIController {
     vTarget *= this.dp.cornerSpeed * this.p.targetSpeed;
 
     if (this.liftTimer > 0) vTarget *= 0.72;
+
+    // Off-course: ignore corner targets and drive back onto the road with
+    // intent (corner braking while stuck on grass makes recovery too slow).
+    const offCourse = v.surf && !v.surf.onRoad && !v.surf.onShoulder;
+    if (offCourse) vTarget = Math.max(vTarget, 16);
+
+    // Rolling-speed floor on GENTLE sections: crawling below this before
+    // drops/jumps leaves no momentum. Tight corners keep their true line
+    // speed (e.g. hairpins demand braking below 6).
+    const curvSoon = Math.abs(track.lineAt(s + 10).curv);
+    if (!offCourse && v.surf && v.surf.onRoad && curvSoon < 0.09) vTarget = Math.max(vTarget, 10);
 
     if (speed < vTarget - 0.6) { input.throttle = 1; input.brake = 0; }
     else if (speed > vTarget + 1.2) { input.throttle = 0; input.brake = 1; }
@@ -147,14 +165,26 @@ export class AIController {
       }
     }
 
+    // --- wrong direction -------------------------------------------------------
+    // After landing backward off a dive crown the kart can drive along the
+    // next leg against its direction while still "on road" — detect the
+    // heading/dot mismatch and rescue instead of spiralling into the field.
+    {
+      const rd = v.surf.dir;
+      const dot = v.vel.x * rd.x + v.vel.z * rd.z;
+      if (dot < -2) this.wrongWayTimer = (this.wrongWayTimer || 0) + dt;
+      else this.wrongWayTimer = Math.max(0, (this.wrongWayTimer || 0) - dt);
+    }
+
     // --- recovery -------------------------------------------------------------
     const off = v.surf && !v.surf.onRoad && !v.surf.onShoulder;
     if (off) this.offRoadTimer += dt; else this.offRoadTimer = 0;
     if (speed < 1.2) this.stuckTimer += dt; else this.stuckTimer = 0;
-    if (this.offRoadTimer > A.recoveryTime || this.stuckTimer > 3.5) {
+    if (this.offRoadTimer > A.recoveryTime || this.stuckTimer > 3.5 || (this.wrongWayTimer || 0) > 1.6) {
       v.doReset('ai-recover');
       this.offRoadTimer = 0;
       this.stuckTimer = 0;
+      this.wrongWayTimer = 0;
     }
 
     return input;

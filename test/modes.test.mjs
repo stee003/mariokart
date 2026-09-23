@@ -7,7 +7,7 @@ import {
 } from '../src/content/cups.js';
 import { GrandPrixSession } from '../src/grandprix.js';
 import { GhostRecorder, GhostPlayer, serializeGhost, deserializeGhost } from '../src/ghost.js';
-import { TimeTrialSession, RecordsStore } from '../src/timetriial.js';
+import { TimeTrialSession, RecordsStore } from '../src/timetrial.js';
 
 let passed = 0, failed = 0;
 const check = (name, cond, extra = '') => {
@@ -130,7 +130,7 @@ console.log('--- Time trial + records ---');
   check('faster run beats records', upd.includes('total') && upd.includes('lap'));
   const rec = store.get('sunforge_circuit');
   check('best total persisted', Math.abs(rec.bestTotal - 180) < 0.001);
-  check('ghost belongs to best run', rec.ghost[0].x === 1);
+  check('ghost belongs to best run (compact storage)', Array.isArray(rec.ghost) && rec.ghost[0] === 1);
   const store2 = new RecordsStore(memStore);
   check('records persist across store instances', store2.get('sunforge_circuit').bestTotal === 180);
 }

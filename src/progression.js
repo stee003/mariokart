@@ -94,10 +94,21 @@ export function unlocksAtLevel(level) {
   return UNLOCKABLES.filter((u) => u.level === level);
 }
 
-// Is an unlock entry available at the given level?
-export function isUnlocked(entry, level) {
-  if (!entry.unlock || entry.unlock.type === 'default') return true;
-  if (entry.unlock.type === 'level') return level >= entry.unlock.level;
+// Is a content entry (character/chassis/paint/...) available to the player?
+// `level` covers {type:'level'} unlocks; `save` (optional) covers
+// {type:'cup'} (trophy in the save) and {type:'achievement'} unlocks.
+export function isUnlocked(entry, level, save = null) {
+  const u = entry.unlock;
+  if (!u || u.type === 'default') return true;
+  if (u.type === 'level') return level >= u.level;
+  if (u.type === 'cup') {
+    if (!save) return false;
+    return !!save.get('trophies', {})[u.cupId];
+  }
+  if (u.type === 'achievement') {
+    if (!save) return false;
+    return (save.get('achievements', []) || []).includes(u.achievementId);
+  }
   return false;
 }
 

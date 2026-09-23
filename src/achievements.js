@@ -41,7 +41,10 @@ export function trackPlayed(save, trackId) {
   return false;
 }
 
-// cond receives (stats, progress) -> bool
+// Tracks without daylight (deep space, night city, crystal caves).
+export const NIGHT_TRACKS = ['neon_cascade', 'glimmer_deep', 'orbital_ring', 'void_terminal'];
+
+// cond receives (stats, progress, save) -> bool
 export const ACHIEVEMENTS = [
   { id: 'first_race',   nameKey: 'ach.firstRace',   descKey: 'ach.firstRace.d',   cond: (s) => s.races >= 1 },
   { id: 'first_win',    nameKey: 'ach.firstWin',    descKey: 'ach.firstWin.d',    cond: (s) => s.wins >= 1 },
@@ -59,6 +62,17 @@ export const ACHIEVEMENTS = [
   { id: 'explorer',     nameKey: 'ach.explorer',    descKey: 'ach.explorer.d',    cond: (s) => s.tracksPlayed >= 16 },
   { id: 'level_5',      nameKey: 'ach.level5',      descKey: 'ach.level5.d',      cond: (s, p) => p.level >= 5 },
   { id: 'level_10',     nameKey: 'ach.level10',     descKey: 'ach.level10.d',     cond: (s, p) => p.level >= 10 },
+  // Night Shift unlocks the character Umbra; set any time-trial record on a
+  // night track (Neon Cascade, Glimmer Deep, Orbital Ring, Void Terminal).
+  { id: 'night_shift',  nameKey: 'ach.nightShift',  descKey: 'ach.nightShift.d',
+    cond: (s, p, save) => {
+      const records = save?.get('records', {}) || {};
+      return NIGHT_TRACKS.some((t) => records[t]?.bestTotal > 0);
+    } },
+  // Collector unlocks the Void Chrome paint: earn ten other achievements.
+  { id: 'collector',    nameKey: 'ach.collector',   descKey: 'ach.collector.d',
+    cond: (s, p, save) =>
+      (save?.get('achievements', []) || []).filter((a) => a !== 'collector').length >= 10 },
 ];
 
 export function earnedAchievements(save) {
@@ -72,7 +86,7 @@ export function checkAchievements(save, progress) {
   const earned = new Set(earnedAchievements(save));
   const fresh = [];
   for (const ach of ACHIEVEMENTS) {
-    if (!earned.has(ach.id) && ach.cond(stats, prog)) {
+    if (!earned.has(ach.id) && ach.cond(stats, prog, save)) {
       earned.add(ach.id);
       fresh.push(ach);
     }
