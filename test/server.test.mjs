@@ -106,5 +106,95 @@ try {
   await new Promise((r) => child.once('exit', r));
 }
 
+// --- Port parsing: a malformed $PORT must warn and fall back, not crash
+// with the cryptic ERR_SOCKET_BAD_PORT RangeError ---
+
+function spawnServer(extraEnv, args) {
+  const proc = spawn(process.execPath, args, {
+    cwd: ROOT,
+    env: { ...process.env, ...extraEnv },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log = '';
+  proc.stdout.on('data', (d) => { log += d; });
+  proc.stderr.on('data', (d) => { log += d; });
+  return {
+    proc,
+    get log() { return log; },
+    // Resolves with the port once the server prints its URL.
+    ready: (timeoutMs = 10000) => new Promise((resolve, reject) => {
+      const started = Date.now();
+      const tick = () => {
+        const m = log.match(/http:\/\/localhost:(\d+)/);
+        if (m) return resolve(Number(m[1]));
+        if (proc.exitCode !== null) return reject(new Error(`server exited early (code ${proc.exitCode})\n${log}`));
+        if (Date.now() - started > timeoutMs) return reject(new Error(`server never printed a URL\n${log}`));
+        setTimeout(tick, 50);
+      };
+      tick();
+    }),
+    // Resolves with the exit code once the server exits (or timeout).
+    exit: (timeoutMs = 10000) => new Promise((resolve) => {
+      const t = setTimeout(() => resolve(-1), timeoutMs);
+      proc.once('exit', (code) => { clearTimeout(t); resolve(code); });
+    }),
+  };
+}
+
+async function portParsingCase(name, extraEnv, args) {
+  const srv = spawnServer(extraEnv, args);
+  try {
+    const port = await srv.ready();
+    check(`${name}: server still boots (no ERR_SOCKET_BAD_PORT)`, Number.isInteger(port) && port > 0, `port=${port}`);
+    check(`${name}: invalid value is reported`, /not a valid port/i.test(srv.log), srv.log.trim());
+    check(`${name}: warning names the offending value`, srv.log.includes(extraEnv.PORT), srv.log.trim());
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL ${name}: ${err.message}`);
+  } finally {
+    srv.proc.kill('SIGTERM');
+    await new Promise((r) => srv.proc.once('exit', r));
+  }
+}
+
+console.log('--- Port parsing ---');
+// $PORT is garbage, the CLI argument is fine -> use the argument.
+await portParsingCase('garbage $PORT with valid argv', { PORT: 'not-a-port', HOST: '127.0.0.1' }, ['server.mjs', '0']);
+// Out-of-range $PORT with a valid argv -> use the argument.
+await portParsingCase('out-of-range $PORT with valid argv', { PORT: '99999', HOST: '127.0.0.1' }, ['server.mjs', '0']);
+// Whitespace-padded $PORT is accepted, not rejected.
+{
+  const srv = spawnServer({ PORT: ' 0 ', HOST: '127.0.0.1' }, ['server.mjs']);
+  try {
+    const port = await srv.ready();
+    check('whitespace-padded $PORT is accepted', Number.isInteger(port) && port > 0 && !/not a valid port/i.test(srv.log), `port=${port}`);
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL whitespace-padded $PORT: ${err.message}`);
+  } finally {
+    srv.proc.kill('SIGTERM');
+    await new Promise((r) => srv.proc.once('exit', r));
+  }
+}
+// Both sources garbage -> must fall back to 8000. Occupy 8000 first so the
+// fallback attempt is observable via the friendly EADDRINUSE message.
+{
+  const blocker = http.createServer();
+  const got8000 = await new Promise((r) => {
+    blocker.once('error', () => r(false));
+    blocker.listen(8000, '127.0.0.1', () => r(true));
+  });
+  if (got8000) {
+    const srv = spawnServer({ PORT: 'garbage', HOST: '127.0.0.1' }, ['server.mjs']);
+    const code = await srv.exit();
+    check('all-garbage sources fall back to port 8000',
+      code === 1 && srv.log.includes('Port 8000 is already in use'), `code=${code}`);
+    check('all-garbage sources explain the rejection', /not a valid port/i.test(srv.log) && /Falling back to default port 8000/i.test(srv.log));
+  } else {
+    console.log('  SKIP 8000-fallback test (port 8000 already in use)');
+  }
+  await new Promise((r) => { blocker.close(() => r()); });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
