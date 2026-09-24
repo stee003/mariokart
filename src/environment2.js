@@ -19,6 +19,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
+import { OBSTACLE_PROFILE, flameHazardRadius } from './track.js';
 import { REFINEMENT_KITS, buildRefinedEnvironment } from './refinedEnvironment.js';
 import { EXPEDITION_KITS, buildExpeditionEnvironment } from './expeditionEnvironment.js';
 
@@ -490,43 +491,58 @@ function buildCanyon(group, track, rockColor) {
   }
 }
 
+// Obstacle meshes are built from the SAME profile table the collision system
+// reads (OBSTACLE_PROFILE in track.js). Nothing here is a magic number: change
+// the profile and both the visible geometry and the hitbox move together.
 function buildObstacles(group, track, state) {
   state.obstacleMeshes = [];
   for (const o of track.obstacles) {
+    const prof = o.profile || OBSTACLE_PROFILE[o.type];
     if (o.type === 'gear') {
       const g = new THREE.Group();
       const mat = new THREE.MeshStandardMaterial({ color: 0x5a6070, roughness: 0.55, metalness: 0.45 });
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 1.1, 14), mat);
+      const hub = new THREE.Mesh(
+        new THREE.CylinderGeometry(prof.hubRadius, prof.hubRadius, prof.hubHeight, 14), mat);
       g.add(hub);
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(o.armRadius * 2, 0.55, 1.1), mat);
-      arm.position.y = 0.45;
+      const arm = new THREE.Mesh(
+        new THREE.BoxGeometry(o.armRadius * 2, prof.armHeight, prof.armDepth), mat);
+      arm.position.y = prof.armLift;
       g.add(arm);
       for (const side of [1, -1]) {
-        const tip = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8), mat);
-        tip.position.set(side * o.armRadius, 0.45, 0);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(prof.tipRadius, 10, 8), mat);
+        tip.position.set(side * o.armRadius, prof.armLift, 0);
         g.add(tip);
       }
-      g.position.copy(o.center); g.position.y += 0.5;
+      g.position.copy(o.center); g.position.y += prof.lift;
       group.add(g);
       state.obstacleMeshes.push({ mesh: g, obstacle: o });
     } else if (o.type === 'slider' || o.type === 'pendulum') {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(o.radius * 1.6, o.type === 'pendulum' ? 3.2 : 2.6, o.radius * 1.6),
+        new THREE.BoxGeometry(o.radius * prof.boxScale, prof.height, o.radius * prof.boxScale),
         new THREE.MeshStandardMaterial({ color: o.type === 'pendulum' ? 0x8a4a4a : 0x707a88, roughness: 0.8, flatShading: true })
       );
       mesh.position.copy(o.pos);
       group.add(mesh);
       state.obstacleMeshes.push({ mesh, obstacle: o });
     } else if (o.type === 'flamejet') {
-      const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 0.8, 8),
+      const nozzle = new THREE.Mesh(
+        new THREE.CylinderGeometry(prof.nozzleRadiusTop, prof.nozzleRadiusBottom, prof.nozzleHeight, 8),
         new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.6, metalness: 0.5 }));
-      nozzle.position.copy(o.pos); nozzle.position.y += 0.2;
+      nozzle.position.copy(o.pos); nozzle.position.y += prof.nozzleLift;
       group.add(nozzle);
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(o.radius * 0.55, 3.4, 8),
+      const flame = new THREE.Mesh(
+        new THREE.ConeGeometry(flameHazardRadius(o.radius), prof.flameHeight, 8),
         new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
-      flame.position.copy(o.pos); flame.position.y += 1.9;
+      flame.position.copy(o.pos); flame.position.y += prof.flameLift;
       group.add(flame);
-      state.obstacleMeshes.push({ mesh: flame, obstacle: o, isFlame: true });
+      // Tarmac ring marking the exact burn footprint of the jet.
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(flameHazardRadius(o.radius) * 0.86, flameHazardRadius(o.radius), 24),
+        new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.copy(o.pos); ring.position.y += 0.06;
+      group.add(ring);
+      state.obstacleMeshes.push({ mesh: flame, obstacle: o, isFlame: true, ring });
     }
   }
 }
@@ -1449,12 +1465,20 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   if (flavor) flavor(group, track, rnd, state, colliders);
 
   state.update = (dt, time) => {
-    for (const { mesh, obstacle, isFlame } of state.obstacleMeshes) {
+    for (const { mesh, obstacle, isFlame, ring } of state.obstacleMeshes) {
       if (obstacle.type === 'gear') mesh.rotation.y = obstacle.angle;
       else if (obstacle.type === 'slider' || obstacle.type === 'pendulum') mesh.position.copy(obstacle.pos);
       else if (isFlame) {
         mesh.visible = obstacle.active;
-        if (obstacle.active) mesh.scale.set(1, 0.9 + Math.sin(time * 30) * 0.15, 1);
+        // Flicker oscillates UP TO the nominal cone height and never past it,
+        // so the drawn fire always stays inside the collider volume that was
+        // derived from that same nominal height (max scale === 1.0).
+        if (obstacle.active) mesh.scale.set(1, 0.86 + Math.sin(time * 30) * 0.14, 1);
+        if (ring) {
+          // the ring always marks the vent footprint; it goes hot while lit
+          ring.material.color.setHex(obstacle.active ? 0xff5a2a : 0xffb347);
+          ring.material.opacity = obstacle.active ? 0.75 : 0.32 + Math.sin(time * 2.4) * 0.06;
+        }
       }
     }
     const pulse = 0.75 + Math.sin(time * 6) * 0.25;

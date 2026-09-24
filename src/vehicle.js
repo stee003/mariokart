@@ -98,9 +98,16 @@ export class VehicleController {
   right(out) { return out.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw)); }
 
   // ------------------------------------------------------------------ reset
-  doReset(reason = 'offtrack') {
+  // `lateral` offsets the respawn across the road. It stays 0 for the player
+  // (centre-of-road is the predictable recovery), but a caller unwinding a
+  // stall against an obstacle can ask for a side so the kart does not reappear
+  // in the exact spot that trapped it.
+  doReset(reason = 'offtrack', lateral = 0) {
     const prog = ((this.surf ? this.surf.progress : 0) - 4 + this.track.L) % this.track.L;
-    const slot = this.track.placeAt(prog, 0);
+    const width = this.surf ? this.surf.width : 12;
+    const lim = Math.max(0, width / 2 - 1.4);
+    const lat = Math.max(-lim, Math.min(lim, lateral || 0));
+    const slot = this.track.placeAt(prog, lat);
     this.place(slot);
     this.resetTimer = CONFIG.recovery.resetDelay;
     this.fx.reset = reason;

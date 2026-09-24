@@ -14,9 +14,10 @@ import { CONFIG } from './config.js';
 import { SaveManager } from './save.js';
 import { LocalizationManager } from './i18n.js';
 import { InputManager, keyLabel, REMAPPABLE_ACTIONS } from './input.js';
-import { AudioManager } from './audio.js';
+import { AudioManager, ENGINE_VOLUME_DEFAULT } from './audio.js';
+import { GamepadUINavigator } from './uiNav.js';
 import { MusicManager } from './music.js';
-import { TrackManager } from './track.js';
+import { TrackManager, resolveObstacleContact, KART_HIT_BOTTOM, KART_HIT_TOP } from './track.js';
 import { buildEnvironment } from './environment.js';
 import { buildThemedEnvironment } from './environment2.js';
 import { TRACK_DEFS } from './content/trackDefs.js';
@@ -78,6 +79,8 @@ class Game {
     this.ghostPlayer = null;
     this.ghostVis = null;
     this._lastRaceState = 'idle';
+    this._celebrate = null;          // staged finish-confetti schedule
+    this._revealTimers = [];         // pending results-reveal audio cues
     this.battle = null;
     this._battleInput = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false, item: false };
 
@@ -96,6 +99,8 @@ class Game {
     this.dust = new ParticlePool(this.scene, CONFIG.particles.dustCount, false);
     this.sparks = new ParticlePool(this.scene, CONFIG.particles.sparkCount, true);
     this.hud = new HUDManager(this.i18n);
+    // Controller support for every menu screen (D-pad/stick + A/B).
+    this.uiNav = new GamepadUINavigator({ input: this.input, audio: this.audio });
 
     // accessibility settings reapplied over everything below
     this._applyA11y();
@@ -116,6 +121,8 @@ class Game {
     };
     window.addEventListener('pointerdown', unlockAudio, { once: true });
     window.addEventListener('keydown', unlockAudio, { once: true });
+    // A mouse/touch click hands control back from the gamepad cursor.
+    window.addEventListener('pointerdown', () => this.uiNav.suppress());
 
     // adaptive resolution: keep 60 fps on weaker GPUs by stepping the render
     // pixel ratio down (and back up when the headroom returns)
@@ -328,6 +335,9 @@ class Game {
     click('btn-settings', () => { this.settingsReturn = 'screen-main'; this.openSettings(); });
     click('btn-settings-back', () => this.hud.showScreen(this.settingsReturn));
     click('btn-resume', () => this.setPaused(false));
+    // Settings stay reachable mid-race: the pause menu opens the same screen
+    // as the main menu, and Back returns to the pause menu (still paused).
+    click('btn-pause-settings', () => this.openSettingsFromPause());
     click('btn-pause-restart', () => { this.setPaused(false); this.restartCurrentRace(); });
     click('btn-pause-menu', () => this.returnToMenu());
     click('btn-results-restart', () => this.onResultsPrimary());
@@ -357,6 +367,7 @@ class Game {
     $('cam-dist').value = this.camCtl.distance;
     $('cam-height').value = this.camCtl.height;
     $('volume').value = this.save.get('volume', 0.8);
+    $('engine-volume').value = this.save.get('engineVolume', ENGINE_VOLUME_DEFAULT);
     $('music-volume').value = this.save.get('musicVolume', 0.55);
     $('cam-dist').addEventListener('input', (e) => {
       const v = parseFloat(e.target.value);
@@ -373,6 +384,10 @@ class Game {
     $('volume').addEventListener('input', (e) => {
       this.audio.init();
       this.audio.setVolume(parseFloat(e.target.value));
+    });
+    $('engine-volume').addEventListener('input', (e) => {
+      this.audio.init();
+      this.audio.setEngineVolume(parseFloat(e.target.value));
     });
     $('music-volume').addEventListener('input', (e) => {
       this.music.init();
@@ -540,6 +555,44 @@ class Game {
   }
 
   openSettings() { this.hud.showScreen('screen-settings'); }
+
+  // Pause -> Settings. The race stays paused; Back returns to the pause menu
+  // rather than to the main menu, so nothing about the session is lost.
+  openSettingsFromPause() {
+    this.settingsReturn = 'screen-pause';
+    this.openSettings();
+  }
+
+  // ESC (keyboard) / START (pad) while a race or battle is running.
+  // Pausing is a stack: Race -> Pause -> Settings, and each press of the pause
+  // key pops one level instead of dumping the player back into traffic from
+  // inside the settings screen.
+  _handlePauseToggle() {
+    if (this.appState !== 'race') return;
+    const vis = this._visibleScreenId();
+    if (this.race.paused) {
+      if (vis && vis !== 'screen-pause') {
+        this.audio.click();
+        this.hud.showScreen('screen-pause');
+        return;
+      }
+      this.setPaused(false);
+      return;
+    }
+    if (vis) return;                       // a screen is already on top
+    const busy = this.mode === 'battle'
+      ? (!!this.battle && this.battle.state !== 'over' && !this._battleResultsShown)
+      : (this.race.state !== 'idle' && this.race.state !== 'results');
+    if (busy) this.setPaused(true);
+  }
+
+  // Id of the screen currently on top (or '' while racing).
+  _visibleScreenId() {
+    for (const s of document.querySelectorAll('.screen')) {
+      if (!s.classList.contains('hidden')) return s.id;
+    }
+    return '';
+  }
 
   // ------------------------------------------------------------ mode selection
   openModeSelect() {
@@ -972,14 +1025,16 @@ class Game {
       kart._hitCd = (kart._hitCd || 0) - dt;
       if (kart._hitCd > 0) continue;
       const v = kart.vehicle;
+      // Same geometry-accurate resolver the race uses: battles no longer hand
+      // out hits from an invisible full-height circle around each obstacle.
+      const y0 = v.y + KART_HIT_BOTTOM, y1 = v.y + KART_HIT_TOP;
       for (const c of cols) {
-        const dx = v.pos.x - c.x, dz = v.pos.z - c.z;
-        if (dx * dx + dz * dz < (c.r + 1.2) * (c.r + 1.2)) {
+        if (resolveObstacleContact(c, v.pos.x, v.pos.z, y0, y1, 1.2)) {
           b.hitLanded(null, kart);
           v.vel.multiplyScalar(0.45);
           kart._hitCd = 1.2;
           this.camCtl.addTrauma(0.3);
-          this.burstAt(v.pos, 0xff8a5a, 10);
+          this.burstAt(v.pos, c.hit === 'flame' ? 0xff7a2a : 0xff8a5a, 10);
           break;
         }
       }
@@ -1017,14 +1072,25 @@ class Game {
       else if (b.mode.id === 'zones' || b.mode.id === 'score') stat.textContent = i18n.t('gp.points', { points: Math.floor(row.score) });
       else stat.textContent = row.eliminated ? '' : i18n.t('battle.hp') + ' ' + Math.ceil(row.hp);
       div.append(pos, name, stat);
+      this.hud.revealRow(div, idx);
       rowsEl.appendChild(div);
     });
+    this.hud.revealHeadline(headline);
     document.getElementById('results-stats').textContent = '';
     document.getElementById('results-extra').innerHTML = '';
     document.getElementById('btn-results-restart').textContent = i18n.t('menu.restart');
     this.hud.showScreen('screen-results');
 
     const playerWon = !!winner && winner.isPlayer;
+    this.hud.spawnConfetti(playerWon ? 44 : winner ? 22 : 0,
+      Math.round(b.timeLeft * 1000) + order.length * 7 + (playerWon ? 1 : 0));
+    this._clearRevealTimers();
+    if (this.audio.ready) {
+      const at = (sec, fn) => this._revealTimers.push(setTimeout(fn, sec * 1000));
+      if (playerWon) at(0.14, () => this.audio.podiumChime(1));
+      order.forEach((r, i) => at(0.38 + i * 0.085, () => this.audio.resultsTick(i, order.length)));
+      at(0.38 + order.length * 0.085 + 0.3, () => this.audio.resultsLock(playerWon));
+    }
     this.music.setState(playerWon ? 'victory' : 'defeat');
     recordStats(this.save, { battles: 1, battleWins: playerWon ? 1 : 0 });
     this._finishProgression({ kind: 'battle', won: playerWon }, {});
@@ -1063,9 +1129,12 @@ class Game {
     this.race.restart();
     this.hud.setItem(null);
     for (const m of this.itemVisuals.boxMeshes) m.visible = this.race.itemsEnabled;
-    this.camCtl.snapTo(this.playerKart.vehicle);
+    this.camCtl.snapTo(this.playerKart.vehicle);   // also ends any cinematic
     this.accumulator = 0;
     this._lastRaceState = 'countdown';
+    this._celebrate = null;
+    this._clearRevealTimers();
+    this.hud.setCinematic(false);
     this.music.setState('countdown');
   }
 
@@ -1100,6 +1169,11 @@ class Game {
     this.appState = 'menu';
     this.race.state = 'idle';
     this.race.paused = false;
+    this._celebrate = null;
+    this._clearRevealTimers();
+    this.camCtl.endCinematic();
+    this.hud.hideFinishFx();
+    this.hud.setCinematic(false);
     this.hud.showHUD(false);
     this.hud.setItem(null);
     this.hud.showScreen('screen-main');
@@ -1122,6 +1196,15 @@ class Game {
     if (this.appState !== 'race') return;
     if (this.race.state === 'results') return;
     this.race.paused = on;
+    if (on) {
+      // the pause card says what is waiting behind it
+      const tag = document.getElementById('pause-race-tag');
+      if (tag) {
+        tag.textContent = this.i18n.t(this.mode === 'battle'
+          ? 'pause.battleInProgress' : 'pause.raceInProgress');
+      }
+      this.settingsReturn = 'screen-pause';
+    }
     this.hud.showScreen(on ? 'screen-pause' : '');
     if (!on) this.hud.hideScreens();
   }
@@ -1140,6 +1223,11 @@ class Game {
       this.music.setState('finalLap');
     } else if (type === 'playerFinished') {
       this.music.setState(payload.pos <= 3 ? 'victory' : 'defeat');
+      // Hand the camera to the finish sweep and start the banner timeline.
+      // Both run off their own clocks so they stay in step with the slow-mo
+      // curve in RaceManager rather than with the frame rate.
+      this.camCtl.beginCinematic();
+      this.hud.finishFx(payload.pos);
     } else if (type === 'lapComplete') {
       if (payload.kart.isPlayer) recordStats(this.save, { laps: 1 });
       if (this.mode === 'timetrial' && this.ttSession && payload.kart.isPlayer) {
@@ -1160,23 +1248,9 @@ class Game {
       }
       this.camCtl.addTrauma(CONFIG.camera.collisionShake * Math.min(1.5, payload.strength));
     } else if (type === 'celebrate') {
-      const colors = [0xff9a3c, 0x2fd8c8, 0xff5df1, 0xffd23f, 0x8aff6a];
-      for (let i = 0; i < 90; i++) {
-        this.dust.spawn(_pp.set(
-          payload.pos.x + (Math.random() - 0.5) * 8,
-          payload.pos.y + 6 + Math.random() * 5,
-          payload.pos.z + (Math.random() - 0.5) * 8,
-        ), _pv.set(
-          (Math.random() - 0.5) * 3,
-          -1 - Math.random() * 2,
-          (Math.random() - 0.5) * 3,
-        ), {
-          color: colors[i % colors.length],
-          size: 0.3 + Math.random() * 0.3,
-          life: 1.6 + Math.random() * 1.2,
-          gravity: 1.5, drag: 0.4,
-        });
-      }
+      // Confetti is staged across the whole cinematic instead of dumped in one
+      // lump at the crossing - see _finishCelebration().
+      this._celebrate = { t: 0, i: 0, win: !!payload.win };
     } else if (type === 'battleKO') {
       this.hud.notify(this.i18n.t('battle.ko', { name: this.i18n.t(payload.kart.nameKey) }));
       this.burstAt(payload.kart.vehicle.pos, 0xff5d5d, 24);
@@ -1207,7 +1281,29 @@ class Game {
   }
 
   // ----------------------------------------------------------- results (modes)
+  // Audio for the results reveal, scheduled against the very timeline the CSS
+  // animations use (HUDManager.RESULTS_REVEAL, handed back as hud.lastReveal)
+  // so every row ticks as it lands and the medal bell rings with the drop.
+  _resultsRevealAudio() {
+    this._clearRevealTimers();
+    const rv = this.hud.lastReveal;
+    const audio = this.audio;
+    if (!rv || !audio || !audio.ready) return;
+    const at = (sec, fn) => this._revealTimers.push(setTimeout(fn, Math.max(0, sec * 1000)));
+    if (rv.podium) at(rv.medal, () => audio.podiumChime(rv.playerPos));
+    for (let i = 0; i < rv.rows; i++) at(rv.rowAt(i), () => audio.resultsTick(i, rv.rows));
+    at(rv.buttonsAt, () => audio.resultsLock(rv.win));
+  }
+
+  _clearRevealTimers() {
+    for (const id of this._revealTimers) clearTimeout(id);
+    this._revealTimers.length = 0;
+  }
+
   _onResultsShown() {
+    this.hud.setCinematic(false);
+    this._celebrate = null;
+    this._resultsRevealAudio();
     const extra = document.getElementById('results-extra');
     extra.innerHTML = '';
     const i18n = this.i18n;
@@ -1389,32 +1485,155 @@ class Game {
         this.hud.setItem(this.items.heldItem(player));
       }
     } else if (type === 'itemHit') {
-      this.burstAt(payload.pos, ITEMS[payload.itemId]?.color ?? 0xffffff, 16);
-      this.camCtl.addTrauma(0.35);
+      const col = ITEMS[payload.itemId]?.color ?? 0xffffff;
+      this.burstAt(payload.pos, col, payload.weak ? 9 : 16);
+      this.camCtl.addTrauma(payload.weak ? 0.18 : 0.35);
+      // A hit the Hex Mirror turned back on its own thrower scores for nobody
+      // (otherwise battle mode would award a point for hitting yourself).
+      const attacker = payload.attacker && payload.attacker !== payload.victim ? payload.attacker : null;
       if (this.mode === 'battle' && this.battle && payload.victim) {
-        this.battle.hitLanded(payload.attacker || null, payload.victim);
+        this.battle.hitLanded(attacker, payload.victim);
       }
       if (payload.victim?.isPlayer) {
-        this.hud.setItem(null);
+        // weak hits and debuffs leave the item in hand: show what is really held
+        this.hud.setItem(this.items.heldItem(player));
         this.hud.notify(this.i18n.t('race.hitBy', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
-      } else if (payload.victim && !payload.kart?.isPlayer) {
-        const near = payload.pos && payload.pos.distanceTo(player.vehicle.pos) < 60;
-        if (near) this.hud.notify(this.i18n.t('race.youHit', { victim: this.i18n.t(payload.victim.nameKey) }));
+      } else if (attacker?.isPlayer && payload.victim) {
+        // the payload names the thrower; no more guessing from distance
+        this.hud.notify(this.i18n.t('race.youHit', { victim: this.i18n.t(payload.victim.nameKey) }));
       }
     } else if (type === 'itemBlocked') {
-      this.burstAt(payload.pos, 0x9a8aff, 14);
+      this.burstAt(payload.pos, 0x7deede, 14);
+      this._shockRing(payload.pos, 0x7deede, 4.5);
       if (payload.victim?.isPlayer) this.hud.notify(this.i18n.t('race.itemBlocked'));
     } else if (type === 'boxPickup') {
       this.burstAt(payload.pos, 0xbaffec, 10);
       if (this.mode === 'battle' && this.battle && payload.kart) {
         this.battle.boxPicked(payload.kart);
       }
+    } else if (type === 'itemBurst') {
+      // Sunflare / Dune Skip / Echo Bell: an outward shockwave, not a hit
+      const col = ITEMS[payload.itemId]?.color ?? 0xffb830;
+      this._shockRing(payload.pos, col, payload.radius ?? 8, 26);
+      this.burstAt(payload.pos, col, 18);
+      if (payload.kart?.isPlayer) this.camCtl.addTrauma(0.22);
+    } else if (type === 'itemWard') {
+      // Forge Ward / Hex Mirror going up: a shell closing around the kart
+      const col = ITEMS[payload.itemId]?.color ?? 0x7deede;
+      this._shockRing(payload.pos, col, 3.2, 12, true);
+      if (payload.kart?.isPlayer) {
+        this.hud.notify(this.i18n.t('race.itemReady', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
+      }
+    } else if (type === 'itemHex') {
+      const col = ITEMS[payload.itemId]?.color ?? 0x8ad0ff;
+      this._shockRing(payload.pos, col, 6, 16, true);
+      if (payload.victim?.isPlayer) {
+        this.hud.notify(this.i18n.t('race.hexed', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
+        this.camCtl.addTrauma(0.2);
+      }
+    } else if (type === 'itemReroll') {
+      // the Kiln Lottery resolving: a flare of sparks, then the new item's name
+      this.burstAt(payload.pos, 0xf0e04a, 22);
+      this._shockRing(payload.pos, 0xf0e04a, 5, 18);
+      if (payload.kart?.isPlayer) {
+        this.hud.notify(this.i18n.t('race.rerolled', { item: this.i18n.t(ITEMS[payload.itemId].nameKey) }));
+      }
+    } else if (type === 'itemReflect') {
+      // the mirror doing its job: a bright snap at the victim, then at the thrower
+      this.burstAt(payload.pos, 0xff5df1, 20);
+      this._shockRing(payload.pos, 0xff5df1, 6, 22);
+      const back = payload.attacker?.vehicle?.pos;
+      if (back) {
+        this.burstAt(back, 0xff5df1, 20);
+        this._shockRing(back, 0xff5df1, 6, 22);
+      }
+      if (payload.victim?.isPlayer) {
+        this.hud.notify(this.i18n.t('race.reflected', { item: this.i18n.t(ITEMS[payload.itemId]?.nameKey ?? 'item.forgeWard') }));
+      } else if (payload.attacker?.isPlayer) {
+        this.camCtl.addTrauma(0.25);
+      }
+    } else if (type === 'itemShatter') {
+      // Glass Fang breaking up: low, wide, and it stays on the road
+      this._glassSpray(payload.pos, payload.radius ?? 3);
     } else if (type === 'cloneFlash' || type === 'tempestZap') {
       this.burstAt(payload.pos, type === 'cloneFlash' ? 0xbaf0ff : 0x8ac8ff, 20);
       this.camCtl.addTrauma(0.3);
-    } else if (type === 'chronoRestore') {
-      this.burstAt(payload.pos, 0xc8b0ff, 12);
-      this.hud.notify(this.i18n.t('race.chronoRestore'));
+    }
+  }
+
+  // An expanding ring of sparks on the ground - the shared "something just
+  // went off here" read, used by every radius effect in the arsenal.
+  _shockRing(pos, color, radius = 8, count = 22, rise = false) {
+    if (!pos) return;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      const sp = radius * (rise ? 0.55 : 1.5);
+      this.sparks.spawn(_pp.set(pos.x, pos.y + 0.45, pos.z), _pv.set(
+        Math.cos(a) * sp, rise ? 2.6 : 0.8, Math.sin(a) * sp,
+      ), { color, size: 0.3, life: 0.34 + Math.random() * 0.18, gravity: rise ? 5 : 12, drag: 2.4 });
+    }
+  }
+
+  // Shards flying out of a broken Glass Fang: fast, flat, catching the light.
+  _glassSpray(pos, radius) {
+    if (!pos) return;
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 3 + Math.random() * radius * 2.2;
+      this.sparks.spawn(_pp.set(pos.x, pos.y + 0.5, pos.z), _pv.set(
+        Math.cos(a) * sp, 2.5 + Math.random() * 3.5, Math.sin(a) * sp,
+      ), { color: i % 3 ? 0xbaf0ff : 0xffffff, size: 0.26, life: 0.4 + Math.random() * 0.3, gravity: 11, drag: 1.6 });
+    }
+  }
+
+  // Staged finish celebration: confetti bursts on beats that line up with the
+  // camera sweep, so the slow-motion shot keeps having things happen in it.
+  _finishCelebration(rawDt) {
+    const c = this._celebrate;
+    if (!c) return;
+    c.t += rawDt;
+    const beats = c.win ? [0, 0.5, 1.05, 1.65, 2.3, 3.0] : [0, 0.8, 1.7, 2.6];
+    const v = this.playerKart ? this.playerKart.vehicle : null;
+    while (c.i < beats.length && c.t >= beats[c.i]) {
+      if (v) this._confettiBurst(v, c.i, c.win);
+      c.i++;
+    }
+    if (c.i >= beats.length && c.t > beats[beats.length - 1] + 1.8) this._celebrate = null;
+  }
+
+  _confettiBurst(v, index, win) {
+    const colors = win
+      ? [0xffd23f, 0xff9a3c, 0x2fd8c8, 0xfff3d0, 0xff5df1]
+      : [0xff9a3c, 0x2fd8c8, 0xffd23f, 0x8aff6a, 0xfff3d0];
+    const n = index === 0 ? 90 : 44;
+    const spread = 5.5 + index * 1.6;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * spread;
+      this.dust.spawn(_pp.set(
+        v.pos.x + Math.cos(a) * r,
+        v.y + 5.5 + Math.random() * 6,
+        v.pos.z + Math.sin(a) * r,
+      ), _pv.set(
+        Math.cos(a) * (0.5 + Math.random()),
+        -1.2 - Math.random() * 2.2,
+        Math.sin(a) * (0.5 + Math.random()),
+      ), {
+        color: colors[(i + index) % colors.length],
+        size: 0.28 + Math.random() * 0.34,
+        life: 1.5 + Math.random() * 1.4,
+        gravity: 1.4, drag: 0.45,
+      });
+    }
+    if (index === 0) {
+      // a ring of sparks at the line reads as the moment of crossing
+      const ring = win ? 30 : 18;
+      for (let i = 0; i < ring; i++) {
+        const a = (i / ring) * Math.PI * 2;
+        this.sparks.spawn(_pp.set(v.pos.x, v.y + 0.6, v.pos.z),
+          _pv.set(Math.cos(a) * 6.5, 2 + Math.random() * 3.2, Math.sin(a) * 6.5),
+          { color: win ? 0xffe9b0 : 0x9be8ff, size: 0.32, life: 0.45 + Math.random() * 0.2, gravity: 8, drag: 1.7 });
+      }
     }
   }
 
@@ -1506,16 +1725,18 @@ class Game {
     this.time += rawDt;
     this.input.poll();
 
+    // Controller menu navigation runs first so an A press on a highlighted
+    // button is resolved before the frame's race logic looks at the pad.
+    this.uiNav.update();
+
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
     } else if (this.mode === 'battle' && this.battle) {
       // ---------------------------------------------------------- battle mode
-      if (this.input.wasPressed('pause')) {
-        if (this.battle.state !== 'over' && !this._battleResultsShown) {
-          this.setPaused(!this.race.paused);
-        }
-      }
-      if (this._battleResultsShown && this.input.wasPressed('confirm')) {
+      if (this.input.wasPressed('pause')) this._handlePauseToggle();
+      // Keyboard Enter keeps its shortcut; the pad's A goes through the UI
+      // navigator so it activates whichever button is actually highlighted.
+      if (this._battleResultsShown && this.input.keyPressed('confirm')) {
         this.onResultsPrimary();
       }
 
@@ -1565,12 +1786,8 @@ class Game {
       }
     } else {
       // pause toggle
-      if (this.input.wasPressed('pause')) {
-        if (this.race.state !== 'idle' && this.race.state !== 'results') {
-          this.setPaused(!this.race.paused);
-        }
-      }
-      if (this.race.state === 'results' && this.input.wasPressed('confirm')) {
+      if (this.input.wasPressed('pause')) this._handlePauseToggle();
+      if (this.race.state === 'results' && this.input.keyPressed('confirm')) {
         this.onResultsPrimary();
       }
       // manual reset
@@ -1632,8 +1849,17 @@ class Game {
           this.audio.updateEngine(0, 0, false);
         }
 
-        this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time,
-          this.kartVisuals.get(pv)?.renderPose || null);
+        const pose = this.kartVisuals.get(pv)?.renderPose || null;
+        if (this.race.state === 'finished' || this.race.state === 'results') {
+          // Finish cinematic: scripted sweep instead of the chase cam. It keeps
+          // drifting slowly while the results card is up, so the card is
+          // revealed over a live background.
+          this.camCtl.updateCinematic(rawDt, pv, this.time, pose);
+        } else {
+          this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time, pose);
+        }
+        this.hud.setCinematic(this.race.state === 'finished');
+        this._finishCelebration(rawDt);
       }
 
       // results transition hook (once per race)

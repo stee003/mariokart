@@ -19,8 +19,15 @@ export const CONFIG = {
     startBoostArmWindow: 0.5,    // seconds before GO during which holding throttle counts
     startBoostGrace: 0.15,       // seconds after GO the hold still counts
     startBoost: { duration: 1.1, speedMult: 1.16, accelMult: 2.1 },
-    resultsDelay: 2.4,           // slow-mo time before results screen
-    slowMoOnFinish: 0.35,        // time scale after player finishes
+    // ---- finish sequence -------------------------------------------------
+    // Crossing the line runs a short cinematic instead of cutting to a card:
+    // fall into slow motion, hold it while the camera sweeps, ease back out,
+    // then reveal the results. All timings are in real seconds.
+    resultsDelay: 3.6,           // total cinematic before the results card
+    slowMoOnFinish: 0.3,         // deepest point of the finish slow-motion
+    slowMoRampIn: 0.42,          // seconds to fall from 1.0 into slow motion
+    slowMoRampOut: 0.55,         // seconds to ease back out before the card
+    slowMoFloor: 0.62,           // time scale the ramp-out settles on
     wrongWayTime: 1.1,           // seconds driving backwards before warning
   },
 
@@ -136,6 +143,17 @@ export const CONFIG = {
     brakePlanningDecel: 16.0,    // how early AI brake for corners
     avoidanceRange: 9.0,
     recoveryTime: 2.2,
+    // Obstacle avoidance. Hitboxes match the visible geometry (see
+    // track.getObstacleColliders), so the AI has to read the road ahead and
+    // pick a side instead of driving the racing line into a sliding block.
+    obstacleMargin: 1.05,        // extra lateral room kept from a hitbox
+    obstacleLookK: 1.3,          // lookahead, metres per m/s of speed
+    obstacleBrakeFloor: 0.34,    // how far the AI will scrub speed to fit a gap
+    obstacleWaitLimit: 4.0,      // seconds the AI will hold for a gap before
+                                 // accepting the hit and driving on
+    itemWallMargin: 0.35,        // lateral room a Brass Bulwark must leave for
+                                 // its lane to count as open at all
+    itemWallClearance: 0.9,      // ...and the room the AI aims to pass it with
     // Personalities: no arbitrary speed cheats. Differences are skill & style.
     personalities: {
       aggressive: {

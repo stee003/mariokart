@@ -2,6 +2,7 @@
 // All scattering is deterministic, rejects BOTH road and shortcut envelopes,
 // and batches repeated shapes. No textures/assets/network requests required.
 import * as THREE from '../lib/three.module.js';
+import { flameHazardRadius } from './track.js';
 
 export const EXPEDITION_KITS = {
   granite_pass: {
@@ -207,7 +208,12 @@ function granite(group, track, rnd, state, b, floor) {
     const spec=track.def.obstacles.find(o=>o.type==='pendulum');
     const p=track.pointAt(spec.s*track.L), anchor=at(p,spec.lat,10);
     obstacleMesh.geometry.dispose(); obstacleMesh.material.dispose();
-    obstacleMesh.geometry=new THREE.IcosahedronGeometry(1.7,1);obstacleMesh.material=rock;
+    const rockRadius=1.7;
+    obstacleMesh.geometry=new THREE.IcosahedronGeometry(rockRadius,1);obstacleMesh.material=rock;
+    // The quarry swaps the generic swinging crate for a boulder: declare the
+    // new silhouette on the obstacle so its hitbox becomes that boulder
+    // instead of staying sized for the crate that was replaced.
+    obstacle.profile={ shape:'sphere', r:rockRadius };
     for(const side of [-1,1]) b.add('Quarry hoist supports',box,trunk,at(p,side*(p.width/2+4),5),[.8,10,.8],yaw(p));
     b.add('Quarry hoist beam',box,trunk,at(p,0,10),[p.width+9,.8,.8],yaw(p));
     const cable=mesh(group,'Quarry hoist cable',new THREE.CylinderGeometry(.06,.06,1,5),standard(0x394954),anchor);
@@ -280,7 +286,10 @@ function magma(group, track, rnd, state, b, floor) {
   for(const [index, o] of track.obstacles.entries()) {
     if(o.type!=='flamejet') continue;
     const spec=track.def.obstacles[index], p=track.pointAt(spec.s*track.L), lat=spec.lat||0;
-    const ring=mesh(group,'Vent warning halo',new THREE.RingGeometry(o.radius+.25,o.radius+.55,24),glow(0xffca58),at(p,lat,.07));ring.rotation.x=-Math.PI/2;
+    // Halo drawn at the real burn radius (the flame cone's base), not the
+    // authored radius, so the ring on the tarmac IS the hitbox.
+    const burn=flameHazardRadius(o.radius);
+    const ring=mesh(group,'Vent warning halo',new THREE.RingGeometry(burn*.86,burn,24),glow(0xffca58),at(p,lat,.07));ring.rotation.x=-Math.PI/2;
     state.extras.push((dt,time)=>{ring.material.color.setHex(o.active?0xff5733:0xffd589);ring.material.color.multiplyScalar(.8+.2*Math.sin(time*4));});
     sign(group,track.pointAt(spec.s*track.L-24),-1,'!','#ffb35f');
   }

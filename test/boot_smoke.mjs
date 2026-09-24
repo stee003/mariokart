@@ -217,6 +217,10 @@ while (ttRace.state !== 'results' && ttT < 600) {
     ? ttKart.ai.update(dt, ttRace.karts, true)
     : { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
   ttRace.update(dt);
+  // The real frame loop animates the track alongside the race, and the TT
+  // course has moving obstacles: without this the sunforge slider/gear sit
+  // frozen mid-road, which no in-game world can do.
+  track.update(dt, ttT);
   if (ttRace.state === 'racing') { tt.captureGhost(ttVehicle); ghostFrames++; }
   ttT += dt;
 }

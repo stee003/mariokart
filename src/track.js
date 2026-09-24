@@ -27,6 +27,98 @@ function catmull1(p0, p1, p2, p3, t) {
 
 const UP = new THREE.Vector3(0, 1, 0);
 
+// ---------------------------------------------------------------------------
+// Obstacle geometry - ONE table, shared by the collision system below and by
+// every environment renderer (environment.js / environment2.js). The meshes
+// are literally built from these numbers, so the visible geometry and the
+// physical hitbox can no longer drift apart.
+//
+// `lift` values are the mesh offsets ABOVE the road surface; `y` spans in the
+// colliders are derived from them, which is what makes the hitbox height
+// match what the player actually sees (a kart that hops over the low gear arm
+// now clears it instead of being clipped by an invisible full-height post).
+// ---------------------------------------------------------------------------
+export const OBSTACLE_PROFILE = {
+  gear: {
+    lift: 0.5,          // group offset above the road
+    hubRadius: 1.5,     // CylinderGeometry(1.5, 1.5, 1.1)
+    hubHeight: 1.1,
+    armLift: 0.45,      // arm box centre, local to the group
+    armHeight: 0.55,
+    armDepth: 1.1,      // box depth -> capsule radius = armDepth / 2
+    tipRadius: 1.2,     // spheres at both arm ends
+  },
+  slider:   { lift: 1.0, boxScale: 1.6, height: 2.6 },
+  pendulum: { lift: 0.8, boxScale: 1.6, height: 3.2 },
+  // The visible flame is a cone: base radius = radius * flameScale at
+  // (lift - height/2), tapering to a point at (lift + height/2). The old
+  // collider used the full `radius` for a full-height cylinder, so the burn
+  // zone was roughly twice as wide as the fire anyone could see.
+  flamejet: { flameScale: 0.55, flameHeight: 3.4, flameLift: 1.9,
+              nozzleRadiusTop: 0.5, nozzleRadiusBottom: 0.7, nozzleHeight: 0.8,
+              nozzleLift: 0.2 },
+};
+
+// Radius of a lit flame jet, derived from its authored radius. Environments
+// draw their warning halos with this so the ring on the tarmac is exactly as
+// wide as the thing that burns you.
+export const flameHazardRadius = (radius) => radius * OBSTACLE_PROFILE.flamejet.flameScale;
+
+// The kart's physical volume for obstacle tests: a vertical cylinder using
+// CONFIG.vehicle.collisionRadius, spanning the visible chassis + pilot.
+export const KART_HIT_BOTTOM = 0.15;
+export const KART_HIT_TOP = 1.35;
+
+// ---------------------------------------------------------------------------
+// Closest-point contact test between a kart cylinder and one collider.
+// Collider shapes (all carry a world-Y span):
+//   circle   { kind:'circle',  x, z, r,           y0, y1, hit }
+//   capsule  { kind:'capsule', x0, z0, x1, z1, r, y0, y1, hit }
+//   box      { kind:'box',     x, z, hx, hz,      y0, y1, hit }
+// Returns { nx, nz, pen } (unit normal pointing AT the kart, penetration in
+// metres) or null when the volumes do not overlap.
+// ---------------------------------------------------------------------------
+export function resolveObstacleContact(c, px, pz, kartY0, kartY1, radius) {
+  // vertical rejection: fly over a low obstacle and it cannot touch you
+  if (kartY1 < c.y0 || kartY0 > c.y1) return null;
+
+  if (c.kind === 'box') {
+    const dx = px - c.x, dz = pz - c.z;
+    const cx = Math.max(-c.hx, Math.min(c.hx, dx));
+    const cz = Math.max(-c.hz, Math.min(c.hz, dz));
+    const ox = dx - cx, oz = dz - cz;
+    const d = Math.hypot(ox, oz);
+    if (d >= radius) return null;
+    if (d > 1e-6) return { nx: ox / d, nz: oz / d, pen: radius - d };
+    // centre buried inside the box: escape along the shallowest axis
+    const fx = c.hx - Math.abs(dx), fz = c.hz - Math.abs(dz);
+    return fx < fz
+      ? { nx: dx < 0 ? -1 : 1, nz: 0, pen: radius + fx }
+      : { nx: 0, nz: dz < 0 ? -1 : 1, pen: radius + fz };
+  }
+
+  if (c.kind === 'capsule') {
+    const ex = c.x1 - c.x0, ez = c.z1 - c.z0;
+    const len2 = ex * ex + ez * ez;
+    let t = len2 > 1e-9 ? ((px - c.x0) * ex + (pz - c.z0) * ez) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ox = px - (c.x0 + ex * t), oz = pz - (c.z0 + ez * t);
+    const d = Math.hypot(ox, oz);
+    const reach = c.r + radius;
+    if (d >= reach) return null;
+    if (d < 1e-6) return { nx: 1, nz: 0, pen: reach };
+    return { nx: ox / d, nz: oz / d, pen: reach - d };
+  }
+
+  // circle
+  const ox = px - c.x, oz = pz - c.z;
+  const d = Math.hypot(ox, oz);
+  const reach = c.r + radius;
+  if (d >= reach) return null;
+  if (d < 1e-6) return { nx: 1, nz: 0, pen: reach };
+  return { nx: ox / d, nz: oz / d, pen: reach - d };
+}
+
 export class TrackManager {
   constructor(def = SUNFORGE_DEF) {
     this.def = def;
@@ -180,7 +272,7 @@ export class TrackManager {
           amp: at.width / 2 + (o.ampExtra ?? 0.8), phase: o.phase ?? 0, speed: o.speed, radius: o.radius,
           pos: at.pos.clone(),
         };
-        slider.pos.y = at.pos.y + 1.0;
+        slider.pos.y = at.pos.y + OBSTACLE_PROFILE.slider.lift;
         slider.baseY = at.pos.y;
         this.obstacles.push(slider);
         if (!this.slider) { this.slider = slider; this.baseY = at.pos.y; }
@@ -191,7 +283,7 @@ export class TrackManager {
           swing: o.swing, speed: o.speed, phase: o.phase ?? 0, radius: o.radius,
           pos: at.pos.clone(),
         };
-        pend.pos.y = at.pos.y + 0.8;
+        pend.pos.y = at.pos.y + OBSTACLE_PROFILE.pendulum.lift;
         pend.baseY = at.pos.y;
         this.obstacles.push(pend);
       } else if (o.type === 'flamejet') {
@@ -228,31 +320,79 @@ export class TrackManager {
         o.phase += o.speed * dt;
         const off = Math.sin(o.phase) * o.amp;
         o.pos.copy(o.base).addScaledVector(o.right, off);
-        o.pos.y = o.baseY + 1.0;
+        o.pos.y = o.baseY + OBSTACLE_PROFILE.slider.lift;
       } else if (o.type === 'pendulum') {
         const off = Math.sin(time * o.speed + o.phase) * o.swing;
         o.pos.copy(o.base).addScaledVector(o.right, off);
-        o.pos.y = o.baseY + 0.8;
+        o.pos.y = o.baseY + OBSTACLE_PROFILE.pendulum.lift;
       } else if (o.type === 'flamejet') {
         o.active = (time % o.period) < o.period * o.duty;
       }
     }
   }
 
-  // Circular colliders for the moving obstacles this frame.
+  // Colliders for the moving obstacles this frame, derived from the exact
+  // geometry the renderers draw (see OBSTACLE_PROFILE). An environment kit
+  // that re-skins an obstacle overwrites `o.profile` with its own dimensions,
+  // so art and physics stay locked together.
   getObstacleColliders() {
     const out = [];
     for (const o of this.obstacles) {
+      const prof = o.profile || OBSTACLE_PROFILE[o.type];
+      if (!prof) continue;
+
       if (o.type === 'gear') {
-        for (let k = 1; k <= 2; k++) {
-          const r = (o.armRadius * k) / 2;
-          out.push({ x: o.center.x + Math.cos(o.angle) * r, z: o.center.z + Math.sin(o.angle) * r, r: k === 2 ? 1.5 : 1.2, hit: 'gear' });
-          out.push({ x: o.center.x - Math.cos(o.angle) * r, z: o.center.z - Math.sin(o.angle) * r, r: k === 2 ? 1.5 : 1.2, hit: 'gear' });
+        const cy = o.center.y + prof.lift;
+        // hub: the visible cylinder under the arm
+        out.push({
+          kind: 'circle', x: o.center.x, z: o.center.z, r: prof.hubRadius,
+          y0: cy - prof.hubHeight / 2, y1: cy + prof.hubHeight / 2, hit: 'gear', src: o,
+        });
+        // arm: the visible box. `rotation.y = angle` maps local +X onto world
+        // (cos, -sin), so the collider must use -sin for Z. Using +sin
+        // mirrored the physical arm across the X axis: the hitbox swept the
+        // opposite side of the hub from the arm you could see.
+        const ax = Math.cos(o.angle) * o.armRadius;
+        const az = -Math.sin(o.angle) * o.armRadius;
+        const armY = cy + prof.armLift;
+        out.push({
+          kind: 'capsule',
+          x0: o.center.x - ax, z0: o.center.z - az,
+          x1: o.center.x + ax, z1: o.center.z + az,
+          r: prof.armDepth / 2,
+          y0: armY - prof.armHeight / 2, y1: armY + prof.armHeight / 2, hit: 'gear', src: o,
+        });
+        // tips: spheres at both ends of the arm
+        for (const s of [1, -1]) {
+          out.push({
+            kind: 'circle', x: o.center.x + ax * s, z: o.center.z + az * s, r: prof.tipRadius,
+            y0: armY - prof.tipRadius, y1: armY + prof.tipRadius, hit: 'gear', src: o,
+          });
         }
       } else if (o.type === 'slider' || o.type === 'pendulum') {
-        out.push({ x: o.pos.x, z: o.pos.z, r: o.radius, hit: o.type });
+        if (prof.shape === 'sphere') {
+          // re-skinned as a rock/boulder by an environment kit
+          out.push({
+            kind: 'circle', x: o.pos.x, z: o.pos.z, r: prof.r,
+            y0: o.pos.y - prof.r, y1: o.pos.y + prof.r, hit: o.type, src: o,
+          });
+        } else {
+          // the visible box: BoxGeometry(radius * boxScale, height, radius * boxScale)
+          const half = (o.radius * prof.boxScale) / 2;
+          out.push({
+            kind: 'box', x: o.pos.x, z: o.pos.z, hx: half, hz: half,
+            y0: o.pos.y - prof.height / 2, y1: o.pos.y + prof.height / 2, hit: o.type, src: o,
+          });
+        }
       } else if (o.type === 'flamejet' && o.active) {
-        out.push({ x: o.pos.x, z: o.pos.z, r: o.radius, hit: 'flame' });
+        // Only the FIRE is dangerous, and only where the fire is: the cone's
+        // visible base radius, over its visible height.
+        const r = flameHazardRadius(o.radius);
+        const base = o.pos.y + prof.flameLift - prof.flameHeight / 2;
+        out.push({
+          kind: 'circle', x: o.pos.x, z: o.pos.z, r,
+          y0: base, y1: base + prof.flameHeight, hit: 'flame', src: o,
+        });
       }
     }
     return out;

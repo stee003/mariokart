@@ -109,9 +109,85 @@ button { font-family: inherit; }
 }
 
 /* ============================================================================
+   GAMEPAD CURSOR — the selection a controller moves between menu buttons.
+   Painted by GamepadUINavigator (src/uiNav.js) with .pad-focus, and only once
+   a pad has actually been used, so mouse players never see it. It has to read
+   at a glance from couch distance: brighter than hover, plus a breathing ring.
+   Deliberately built from box-shadow only - ::before/::after are already used
+   by .btn-primary (shine sweep) and .main-action (accent bar).
+   ========================================================================== */
+.pad-focus,
+.pad-focus.btn {
+  border-color: var(--sun-1) !important;
+  background: linear-gradient(180deg, rgba(120, 70, 32, 0.92), rgba(64, 36, 17, 0.92)) !important;
+  color: #fff6e2 !important;
+  transform: translateY(-1px);
+  outline: none;
+  animation: padPulse 1.15s ease-in-out infinite;
+}
+.pad-focus.btn-primary,
+.pad-focus.btn.selected {
+  background: linear-gradient(180deg, var(--sun-1), var(--sun-3)) !important;
+  color: #33190a !important;
+  animation-name: padPulseHot;
+}
+@keyframes padPulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 233, 176, 0.8), 0 0 20px rgba(255, 179, 71, 0.3), 0 10px 26px rgba(0, 0, 0, 0.4); }
+  50%      { box-shadow: 0 0 0 5px rgba(255, 233, 176, 0.3), 0 0 30px rgba(255, 179, 71, 0.5), 0 10px 26px rgba(0, 0, 0, 0.4); }
+}
+@keyframes padPulseHot {
+  0%, 100% { box-shadow: 0 0 0 2px #fff3d0, 0 0 24px rgba(255, 190, 90, 0.45), 0 10px 26px rgba(0, 0, 0, 0.4); }
+  50%      { box-shadow: 0 0 0 5px rgba(255, 243, 208, 0.4), 0 0 34px rgba(255, 190, 90, 0.65), 0 10px 26px rgba(0, 0, 0, 0.4); }
+}
+/* the main-menu action rows keep their teal accent bar as the cursor marker */
+.main-actions .main-action.pad-focus { transform: translateX(3px); border-color: var(--sun-1) !important; }
+.main-actions .main-action.pad-focus::before { opacity: 1; background: var(--sun-1); box-shadow: 0 0 14px rgba(255, 233, 176, 0.7); }
+/* sliders: show the pad is on the value, not just the row */
+input[type="range"].pad-focus {
+  outline: 3px solid var(--sun-1);
+  outline-offset: 4px;
+  animation: none;
+  box-shadow: 0 0 18px rgba(255, 179, 71, 0.4);
+}
+/* a hint strip appears while the pad owns the menu */
+body.pad-nav .controls-hint.gamepad-hint { color: var(--teal-soft); }
+.reduce-fx .pad-focus { animation: none; box-shadow: 0 0 0 3px rgba(255, 233, 176, 0.85), 0 10px 26px rgba(0, 0, 0, 0.4); }
+
+/* ============================================================================
+   PAUSE CARD — race context + settings shortcut
+   ========================================================================== */
+.pause-race-tag {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: -6px 0 4px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  background: rgba(60, 33, 14, 0.55);
+  color: var(--sun-1);
+  font-size: 12px; font-weight: 700; letter-spacing: 2.4px; text-transform: uppercase;
+}
+.pause-race-tag::before {
+  content: '';
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--sun-2);
+  box-shadow: 0 0 10px var(--sun-2);
+  animation: pauseBlink 1.4s ease-in-out infinite;
+}
+@keyframes pauseBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.pause-hint {
+  margin-top: 12px;
+  color: var(--text-faint);
+  font-size: 12.5px; letter-spacing: 0.3px; line-height: 1.5;
+}
+.reduce-fx .pause-race-tag::before { animation: none; }
+
+/* ============================================================================
    HUD — racing plates over the 3D scene
    ========================================================================== */
-#hud { position: absolute; inset: 0; pointer-events: none; }
+/* z-index: 0 makes the HUD a stacking context, so nothing inside it (the
+   finish overlay runs at z-index 4) can ever paint over a .screen - screens
+   still win by DOM order, exactly as before. */
+#hud { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 
 .hud-top {
   position: absolute; top: 14px; left: 0; right: 0;
@@ -1096,6 +1172,196 @@ input[type="range"]::-moz-range-thumb {
 .garage-hint { font-size: 13px; color: var(--text-faint); margin: 4px 0 14px; text-align: center; }
 
 /* ============================================================================
+   FINISH CINEMATIC
+   Crossing the line hands the screen to #finish-fx. HUDManager.finishFx()
+   does one thing - toggles `.play` - and the whole timeline below runs off
+   CSS: vignette and sunburst settle in, a checkered ribbon whips past from
+   each edge (in time with the audio whoosh), a light flash pops, then the
+   placing banner slams in and everything self-fades before the results card
+   arrives. Total runtime is tuned against CONFIG.race.resultsDelay.
+   ========================================================================== */
+#finish-fx {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 4;               /* over the race chrome, under any .screen */
+}
+#finish-fx.hidden { display: none; }
+#finish-fx > * { position: absolute; }
+
+/* edge darkening: pulls the eye to the middle of the shot */
+#finish-fx .fx-vignette {
+  inset: 0;
+  background:
+    radial-gradient(ellipse 78% 62% at 50% 46%, transparent 42%, rgba(8, 4, 2, 0.62) 100%),
+    linear-gradient(180deg, rgba(8, 4, 2, 0.5), transparent 26%, transparent 74%, rgba(8, 4, 2, 0.5));
+  opacity: 0;
+}
+#finish-fx.play .fx-vignette { animation: fxVignette 3.3s ease-out both; }
+
+/* slow sunburst behind the banner */
+#finish-fx .fx-rays {
+  left: 50%; top: 42%;
+  width: 190vmax; height: 190vmax;
+  margin: -95vmax 0 0 -95vmax;
+  background: conic-gradient(from 0deg,
+    rgba(255, 190, 90, 0.20) 0deg 7deg, transparent 7deg 24deg,
+    rgba(255, 190, 90, 0.14) 24deg 30deg, transparent 30deg 48deg);
+  -webkit-mask-image: radial-gradient(circle, rgba(0,0,0,0.9) 8%, transparent 58%);
+  mask-image: radial-gradient(circle, rgba(0,0,0,0.9) 8%, transparent 58%);
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+#finish-fx.play .fx-rays { animation: fxRays 3.3s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+
+/* the line-crossing pop */
+#finish-fx .fx-flash {
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 46% at 50% 46%, rgba(255, 246, 220, 0.95), rgba(255, 196, 110, 0.42) 46%, transparent 72%);
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+#finish-fx.play .fx-flash { animation: fxFlash 0.62s ease-out both; }
+
+/* checkered ribbons: one whips left-to-right along the top edge, the other
+   right-to-left along the bottom, so the frame is "flagged" for a moment */
+#finish-fx .fx-flag {
+  left: -20%; width: 140%; height: 46px;
+  background-color: #120a05;
+  background-image:
+    repeating-conic-gradient(#fff3dd 0% 25%, #120a05 0% 50%);
+  background-size: 23px 23px;
+  box-shadow: 0 0 26px rgba(0, 0, 0, 0.55), 0 0 22px rgba(255, 190, 100, 0.22);
+  opacity: 0;
+}
+#finish-fx .fx-flag-top { top: 9%; transform: skewY(-1.6deg); }
+#finish-fx .fx-flag-bot { bottom: 9%; transform: skewY(1.6deg); }
+#finish-fx.play .fx-flag-top { animation: fxFlagL 1.05s cubic-bezier(0.3, 0.05, 0.25, 1) 0.02s both; }
+#finish-fx.play .fx-flag-bot { animation: fxFlagR 1.05s cubic-bezier(0.3, 0.05, 0.25, 1) 0.09s both; }
+
+/* ---- placing banner ----------------------------------------------------- */
+#finish-fx .fx-banner {
+  inset: auto 0 auto 0; top: 34%;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  text-align: center;
+  padding: 0 16px;
+}
+/* the whole banner racks into focus as it arrives (animating `filter` on the
+   place itself would override the tier glow below) */
+#finish-fx.play .fx-banner { animation: fxBannerFocus 0.66s ease-out 0.38s both; }
+@keyframes fxBannerFocus {
+  0%   { filter: blur(9px); }
+  100% { filter: blur(0); }
+}
+#finish-fx .fx-kicker {
+  font-family: var(--font-ui);
+  font-size: clamp(13px, 1.5vw, 18px); font-weight: 700;
+  letter-spacing: 0.62em; text-indent: 0.62em; text-transform: uppercase;
+  color: var(--teal-soft);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+  opacity: 0;
+}
+#finish-fx .fx-place {
+  font-family: var(--font-display);
+  font-size: clamp(58px, 13vw, 148px);
+  line-height: 0.94;
+  text-transform: uppercase;
+  color: var(--sun-1);
+  letter-spacing: 1px;
+  opacity: 0;
+}
+#finish-fx .fx-sub {
+  font-family: var(--font-ui);
+  font-size: clamp(14px, 1.7vw, 21px); font-weight: 600; font-style: italic;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75);
+  opacity: 0;
+}
+
+/* placing tiers recolor the banner: gold, teal, then a muted sunset */
+#finish-fx.fx-win .fx-place {
+  background: linear-gradient(178deg, #fff8e0 6%, #ffd479 34%, #ff9d2e 62%, #e0561a 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 4px 0 rgba(90, 44, 4, 0.55)) drop-shadow(0 14px 34px rgba(255, 150, 40, 0.45));
+}
+#finish-fx.fx-win .fx-kicker { color: #ffe08a; }
+#finish-fx.fx-podium .fx-place {
+  background: linear-gradient(178deg, #eafffb 8%, var(--teal) 58%, #17a79a 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 4px 0 rgba(0, 46, 42, 0.55)) drop-shadow(0 14px 30px rgba(47, 216, 200, 0.32));
+}
+#finish-fx.fx-back .fx-place {
+  background: linear-gradient(178deg, #ffe6c6 10%, #e0955c 62%, #a9603a 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 4px 0 rgba(50, 22, 6, 0.5)) drop-shadow(0 12px 26px rgba(0, 0, 0, 0.4));
+}
+#finish-fx.fx-back .fx-rays { opacity: 0; animation: none; }
+
+#finish-fx.play .fx-kicker { animation: fxKicker 0.55s cubic-bezier(0.16, 1.1, 0.3, 1) 0.3s both,
+                                       fxBannerOut 0.6s ease 2.62s both; }
+#finish-fx.play .fx-place  { animation: fxPlace 0.66s cubic-bezier(0.14, 1.5, 0.32, 1) 0.42s both,
+                                       fxBannerOut 0.6s ease 2.62s both; }
+#finish-fx.play .fx-sub    { animation: fxSub 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) 0.74s both,
+                                       fxBannerOut 0.6s ease 2.62s both; }
+
+@keyframes fxVignette {
+  0% { opacity: 0; } 12% { opacity: 0.75; } 74% { opacity: 0.9; } 100% { opacity: 0; }
+}
+@keyframes fxRays {
+  0%   { opacity: 0; transform: rotate(-14deg) scale(0.72); }
+  18%  { opacity: 0.55; }
+  70%  { opacity: 0.42; }
+  100% { opacity: 0; transform: rotate(16deg) scale(1.16); }
+}
+@keyframes fxFlash {
+  0% { opacity: 0; transform: scale(0.86); }
+  7% { opacity: 0.92; }
+  26% { opacity: 0.3; }
+  100% { opacity: 0; transform: scale(1.14); }
+}
+@keyframes fxFlagL {
+  0%   { opacity: 0; transform: translate3d(-105%, 0, 0) skewY(-1.6deg); }
+  14%  { opacity: 0.95; }
+  62%  { opacity: 0.95; }
+  100% { opacity: 0; transform: translate3d(105%, 0, 0) skewY(-1.6deg); }
+}
+@keyframes fxFlagR {
+  0%   { opacity: 0; transform: translate3d(105%, 0, 0) skewY(1.6deg); }
+  14%  { opacity: 0.95; }
+  62%  { opacity: 0.95; }
+  100% { opacity: 0; transform: translate3d(-105%, 0, 0) skewY(1.6deg); }
+}
+@keyframes fxKicker {
+  0%   { opacity: 0; transform: translateY(-18px); letter-spacing: 1.3em; text-indent: 1.3em; }
+  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.62em; text-indent: 0.62em; }
+}
+@keyframes fxPlace {
+  0%   { opacity: 0; transform: scale(2.6) rotate(-7deg); }
+  46%  { opacity: 1; }
+  62%  { transform: scale(0.965) rotate(1.2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+@keyframes fxSub {
+  0%   { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes fxBannerOut {
+  0%   { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-22px) scale(0.965); }
+}
+
+/* Race chrome eases out while the cinematic plays, then back in for the
+   results card (HUDManager.setCinematic). */
+.hud-top, .hud-bottom, #minimap-box {
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+#hud.cine .hud-top { opacity: 0; transform: translateY(-10px); }
+#hud.cine .hud-bottom { opacity: 0; transform: translateY(12px); }
+#hud.cine #minimap-box { opacity: 0; transform: translateY(-8px) scale(0.96); }
+
+/* ============================================================================
    RESULTS
    ========================================================================== */
 .results-card { min-width: 480px; }
@@ -1155,6 +1421,134 @@ input[type="range"]::-moz-range-thumb {
 .result-name { flex: 1; text-align: left; font-weight: 700; }
 .result-time { font-variant-numeric: tabular-nums; color: var(--text); font-style: italic; }
 #results-stats { color: var(--text-dim); font-size: 15px; margin-bottom: 8px; line-height: 1.8; }
+
+/* ---------------- results reveal ----------------------------------------
+   The card slams in, the medal drops, the headline sweeps up, then rows land
+   one after another (stagger is a per-row animation-delay set by
+   HUDManager.revealRow) and the stats and buttons fade up last. */
+#screen-results .results-card { position: relative; z-index: 1; }
+#screen-results:not(.hidden) .results-card {
+  animation: cardSlam 0.54s cubic-bezier(0.18, 1.28, 0.4, 1) both;
+}
+@keyframes cardSlam {
+  0%   { opacity: 0; transform: translateY(34px) scale(0.9); }
+  58%  { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* podium medal */
+#results-medal {
+  position: relative;
+  width: 92px; height: 92px;
+  margin: -8px auto 6px;
+  display: grid; place-items: center;
+}
+#results-medal.hidden { display: none; }
+#results-medal span {
+  position: relative; z-index: 2;
+  font-family: var(--font-display);
+  font-size: 30px; line-height: 1;
+  color: #43290a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+#results-medal::before {
+  content: '';
+  position: absolute; inset: 6px;
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  background: linear-gradient(160deg, #ffe9a8, #e8a53c 62%, #b9762a);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+#results-medal.gold::before { background: linear-gradient(160deg, #fff4cf, #ffd479 46%, #e8a53c 78%, #b9762a); }
+#results-medal.silver::before { background: linear-gradient(160deg, #fbfbff, #b6bccf 60%, #7d849a); }
+#results-medal.silver span { color: #23252e; }
+#results-medal.bronze::before { background: linear-gradient(160deg, #f6c39c, #c07a45 60%, #8d5228); }
+#results-medal.bronze span { color: #2e1608; }
+#results-medal .medal-ring {
+  position: absolute; inset: -4px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 214, 130, 0.55);
+  border-top-color: transparent; border-bottom-color: transparent;
+  animation: medalSpin 5.5s linear infinite;
+}
+#results-medal .medal-ring-2 {
+  inset: -14px;
+  border-style: dashed;
+  border-color: rgba(255, 214, 130, 0.28);
+  animation: medalSpin 9s linear infinite reverse;
+}
+#results-medal.silver .medal-ring { border-color: rgba(226, 232, 250, 0.5); border-top-color: transparent; border-bottom-color: transparent; }
+#results-medal.bronze .medal-ring { border-color: rgba(240, 178, 138, 0.5); border-top-color: transparent; border-bottom-color: transparent; }
+@keyframes medalSpin { to { transform: rotate(360deg); } }
+
+#results-medal.drop { animation: medalDrop 0.78s cubic-bezier(0.2, 1.35, 0.36, 1) both; }
+@keyframes medalDrop {
+  0%   { opacity: 0; transform: translateY(-78px) scale(0.42) rotate(-24deg); }
+  52%  { opacity: 1; transform: translateY(7px) scale(1.08) rotate(3deg); }
+  74%  { transform: translateY(-3px) scale(0.985) rotate(-1.5deg); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(0deg); }
+}
+
+#results-headline.reveal { animation: headlineIn 0.62s cubic-bezier(0.16, 1.1, 0.3, 1) both; }
+@keyframes headlineIn {
+  0%   { opacity: 0; transform: translateY(18px) scale(0.92); letter-spacing: 9px; }
+  100% { opacity: 1; transform: translateY(0) scale(1); letter-spacing: 1px; }
+}
+
+.result-row.row-in { animation: rowIn 0.46s cubic-bezier(0.2, 0.9, 0.25, 1) both; }
+@keyframes rowIn {
+  0%   { opacity: 0; transform: translateX(-28px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+/* your own row arrives from the other side and lights up as it lands */
+.result-row.you.row-in { animation: rowInYou 0.56s cubic-bezier(0.2, 0.9, 0.25, 1) both; }
+@keyframes rowInYou {
+  0%   { opacity: 0; transform: translateX(30px) scale(0.97); box-shadow: 0 0 0 rgba(47, 216, 200, 0); }
+  55%  { opacity: 1; box-shadow: 0 0 30px rgba(47, 216, 200, 0.5); }
+  100% { opacity: 1; transform: translateX(0) scale(1); box-shadow: 0 0 18px rgba(47, 216, 200, 0.15); }
+}
+
+#results-stats.stat-in { animation: fadeUp 0.5s ease both; }
+.menu-buttons.btns-in { animation: fadeUp 0.45s ease both; }
+@keyframes fadeUp {
+  0%   { opacity: 0; transform: translateY(14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+#results-stats .stat-line {
+  display: flex; align-items: baseline; justify-content: center; gap: 8px;
+}
+#results-stats .stat-line b {
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
+}
+
+/* confetti in front of the card: purely decorative, never blocks clicks */
+#results-confetti {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+#results-confetti.hidden { display: none; }
+#results-confetti .spark {
+  --drift: 0;
+  position: absolute; top: -12%;
+  border-radius: 2px;
+  opacity: 0;
+  animation: confettiFall 3.2s linear both;
+}
+#results-confetti .s0 { background: linear-gradient(180deg, #fff3d0, #ffb347); }
+#results-confetti .s1 { background: linear-gradient(180deg, #bafff5, #2fd8c8); }
+#results-confetti .s2 { background: linear-gradient(180deg, #ffd0f9, #ff5df1); }
+#results-confetti .s3 { background: linear-gradient(180deg, #fff8e6, #ffe9b0); }
+#results-confetti .s4 { background: linear-gradient(180deg, #d6ffb0, #8aff6a); }
+@keyframes confettiFall {
+  0%   { opacity: 0; transform: translate3d(0, -12vh, 0) rotate(0deg); }
+  9%   { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(calc(var(--drift) * 13vw), 112vh, 0)
+                             rotate(calc(420deg + var(--drift) * 620deg)); }
+}
+
 
 /* ---------------- grand prix / time trial extras ------------------------ */
 .gp-extra { margin: 6px 0 18px; }
@@ -1249,6 +1643,32 @@ body[data-uiscale="130"] .menu-card { zoom: 1.22; }
 .reduce-fx .btn-primary::after { display: none; }
 .reduce-fx .loadout-ready i { animation: none; }
 .reduce-fx .screen:not(.hidden) { animation: none; }
+/* finish cinematic + results reveal: keep the information, drop the motion */
+.reduce-fx #finish-fx .fx-flash,
+.reduce-fx #finish-fx .fx-rays,
+.reduce-fx #finish-fx .fx-flag,
+.reduce-fx #results-confetti,
+.reduce-fx #results-medal .medal-ring { display: none; }
+.reduce-fx #finish-fx .fx-vignette { animation: none; opacity: 0.55; }
+.reduce-fx #finish-fx .fx-banner,
+.reduce-fx #finish-fx .fx-kicker,
+.reduce-fx #finish-fx .fx-sub { animation: none; opacity: 1; filter: none; }
+.reduce-fx #finish-fx .fx-place {
+  animation: fxFadeHold 2.9s ease both;   /* no slam, no drift: just present */
+}
+@keyframes fxFadeHold {
+  0% { opacity: 0; } 8% { opacity: 1; } 88% { opacity: 1; } 100% { opacity: 0; }
+}
+.reduce-fx #screen-results:not(.hidden) .results-card,
+.reduce-fx #results-medal.drop,
+.reduce-fx #results-headline.reveal,
+.reduce-fx .result-row.row-in,
+.reduce-fx .result-row.you.row-in,
+.reduce-fx #results-stats.stat-in,
+.reduce-fx .menu-buttons.btns-in { animation: none; opacity: 1; transform: none; }
+.reduce-fx #hud.cine .hud-top,
+.reduce-fx #hud.cine .hud-bottom,
+.reduce-fx #hud.cine #minimap-box { transition: none; }
 
 /* ============================================================================
    MISC

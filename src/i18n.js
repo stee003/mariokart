@@ -32,6 +32,7 @@ const BASE_STRINGS = {
   'settings.camDist':  { en: 'Camera distance',                     it: 'Distanza telecamera' },
   'settings.camHeight':{ en: 'Camera height',                       it: 'Altezza telecamera' },
   'settings.volume':   { en: 'Volume',                              it: 'Volume' },
+  'settings.engineVolume': { en: 'Engine volume',                   it: 'Volume motore' },
   'settings.music':    { en: 'Music volume',                        it: 'Volume musica' },
   'settings.difficulty': { en: 'AI difficulty',                     it: 'Difficoltà IA' },
   'settings.laps':     { en: 'Quick race laps',                     it: 'Giri gara rapida' },
@@ -142,6 +143,19 @@ const BASE_STRINGS = {
   'ai.you':            { en: 'You',                                 it: 'Tu' },
 
   'pause.title':       { en: 'Paused',                              it: 'Pausa' },
+  'pause.raceInProgress': { en: 'Race in progress',                 it: 'Gara in corso' },
+  'pause.battleInProgress': { en: 'Battle in progress',             it: 'Battaglia in corso' },
+  'pause.settingsHint': { en: 'Settings apply live - the race stays paused while you tune them.',
+                          it: 'Le impostazioni si applicano subito: la gara resta in pausa.' },
+
+  // ---------------- finish sequence (results presentation) ----------------
+  'results.finishBanner': { en: 'FINISH',                           it: 'TRAGUARDO' },
+  'results.posBanner':    { en: '{pos} PLACE',                      it: '{pos} POSTO' },
+  'results.winner':       { en: 'Winner',                           it: 'Vincitore' },
+  'results.yourTime':     { en: 'Your time',                        it: 'Il tuo tempo' },
+  'results.bestLapShort': { en: 'Best lap',                         it: 'Miglior giro' },
+  'results.newBest':      { en: 'New personal best!',               it: 'Nuovo record personale!' },
+  'results.podiumBanner': { en: 'Podium finish',                    it: 'Arrivo a podio' },
 
   'results.title':     { en: 'Race Results',                        it: 'Risultati della gara' },
   'results.pos':       { en: 'Position',                            it: 'Posizione' },
@@ -151,6 +165,11 @@ const BASE_STRINGS = {
   'results.podium':    { en: 'On the podium!',                      it: 'Sul podio!' },
   'results.done':      { en: 'Race complete',                       it: 'Gara completata' },
   'results.rowFormat': { en: '{pos} · {name} · {time}',             it: '{pos} · {name} · {time}' },
+
+  // ---------------- gamepad navigation hints ----------------
+  'nav.gamepadHint':   { en: 'Gamepad: stick / D-pad move · A select · B back · START pause',
+                         it: 'Gamepad: leva / croce muovi · A seleziona · B indietro · START pausa' },
+  'nav.continue':      { en: 'Press A to continue',                 it: 'Premi A per continuare' },
 
   'error.webgl':       { en: 'WebGL is not available in this browser.',
                          it: 'WebGL non è disponibile in questo browser.' },

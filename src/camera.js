@@ -25,6 +25,7 @@ export class CameraController {
     this._target = new THREE.Vector3();
     this.mode = 'menu';
     this.menuAngle = 0;
+    this.cine = null;           // finish cinematic state (see beginCinematic)
     // accessibility multipliers (set from settings; 1 = default feel)
     this.shakeScale = 1;        // reduce for motion-sensitive players
     this.fovScale = 1;          // reduce to damp speed/boost FOV swings
@@ -34,7 +35,11 @@ export class CameraController {
 
   addTrauma(amount) { this.trauma = Math.min(1, this.trauma + amount * this.shakeScale); }
 
+  // Leave the cinematic and hand the camera back to the chase cam.
+  endCinematic() { this.cine = null; }
+
   snapTo(vehicle) {
+    this.cine = null;
     this.yaw = vehicle.yaw;
     const back = this._back(_v1);
     this.pos.copy(vehicle.pos).addScaledVector(back, this.distance);
@@ -77,24 +82,7 @@ export class CameraController {
     _desired.set(ax, ay, az).addScaledVector(back, this.distance);
     _desired.y = ay + this.height;
 
-    // --- collision avoidance: don't clip environment geometry ------------
-    _origin.set(ax, ay + 1.4, az);
-    _dir.copy(_desired).sub(_origin);
-    const len = _dir.length();
-    _dir.normalize();
-    this._ray.origin.copy(_origin);
-    this._ray.direction.copy(_dir);
-    let closest = len;
-    for (const box of this.colliders) {
-      const hit = this._ray.intersectBox(box, _hitPoint);
-      if (hit) {
-        const d = _origin.distanceTo(hit);
-        if (d < closest) closest = d;
-      }
-    }
-    if (closest < len) {
-      _desired.copy(_origin).addScaledVector(_dir, Math.max(1.6, closest - C.margin));
-    }
+    this._avoid(_origin.set(ax, ay + 1.4, az), _desired);
 
     // keep above the terrain
     const groundY = this.track.surface(_desired, this._hint || (this._hint = { main: -1, sc: -1 }));
@@ -129,6 +117,97 @@ export class CameraController {
     const targetFov = C.fovBase + C.fovSpeedAdd * speedRatio * this.fovScale
       + (boostActive ? C.fovBoostAdd * this.fovScale : 0);
     this._updateFov(targetFov, dt);
+  }
+
+  // Pull `desired` back to just in front of the first environment box hit
+  // along origin->desired. Shared by the chase cam and the finish cinematic so
+  // a sweeping camera never travels through scenery.
+  _avoid(origin, desired) {
+    if (!this.colliders.length) return;
+    _dir.copy(desired).sub(origin);
+    const len = _dir.length();
+    if (len < 1e-4) return;
+    _dir.normalize();
+    this._ray.origin.copy(origin);
+    this._ray.direction.copy(_dir);
+    let closest = len;
+    for (const box of this.colliders) {
+      const hit = this._ray.intersectBox(box, _hitPoint);
+      if (hit) {
+        const d = origin.distanceTo(hit);
+        if (d < closest) closest = d;
+      }
+    }
+    if (closest < len) {
+      desired.copy(origin).addScaledVector(_dir, Math.max(1.6, closest - C.margin));
+    }
+  }
+
+  // ------------------------------------------------------------- cinematic
+  // The finish-line camera. It starts from wherever the chase cam is, then
+  // sweeps around the kart while pulling in and dropping toward a
+  // three-quarter view, easing the FOV down for a slow push-in. Once the
+  // scripted sweep ends it keeps drifting, so the results card is revealed
+  // over a live background instead of a frozen frame.
+  beginCinematic(opts = {}) {
+    this.cine = {
+      t: 0,
+      a0: opts.yaw != null ? opts.yaw : this.yaw,
+      sweep: opts.sweep != null ? opts.sweep : -1.5,   // radians around the kart
+      dur: opts.duration != null ? opts.duration : 2.8,
+      drift: opts.drift != null ? opts.drift : 0.09,   // rad/s after the sweep
+      pull: opts.pull != null ? opts.pull : 0.38,      // how much closer to go
+      drop: opts.drop != null ? opts.drop : 0.45,      // how much lower to go
+    };
+    this._cineHint = { main: -1, sc: -1 };
+  }
+
+  // `anchor` is the interpolated render pose, as in update().
+  updateCinematic(dt, vehicle, time, anchor = null) {
+    if (!this.cine) this.beginCinematic();
+    const c = this.cine;
+    c.t += dt;
+    const k = Math.min(1, c.t / c.dur);
+    const e = k * k * (3 - 2 * k);                                  // smoothstep
+    const drift = c.t > c.dur ? (c.t - c.dur) * c.drift : 0;
+    const ang = c.a0 + c.sweep * e + drift;
+
+    const ax = anchor ? anchor.x : vehicle.pos.x;
+    const ay = anchor ? anchor.y : vehicle.y;
+    const az = anchor ? anchor.z : vehicle.pos.z;
+
+    const dist = this.distance * (1 - c.pull * e);
+    const lift = this.height * (1 - c.drop * e) + 0.55
+      + 0.14 * Math.sin(c.t * 1.6) * (1 - 0.5 * e);   // a slow breathing bob
+
+    _desired.set(ax - Math.sin(ang) * dist, ay + lift, az - Math.cos(ang) * dist);
+    this._avoid(_origin.set(ax, ay + 1.3, az), _desired);
+
+    // keep above the terrain (the sweep can carry the camera over a bank)
+    const g = this.track.surface(_desired, this._cineHint);
+    if (_desired.y < g.y + C.minHeightAboveGround) _desired.y = g.y + C.minHeightAboveGround;
+
+    this.pos.lerp(_desired, Math.min(1, 3.4 * dt));
+
+    // --- shake: bleed it off, a celebration should feel smooth -------------
+    this.trauma = Math.max(0, this.trauma - C.shakeDecay * 1.7 * dt);
+    const shake = this.trauma * this.trauma;
+    const st = time * 31 + this.shakeSeed;
+    _shake.set(
+      Math.sin(st * 1.3) * 0.5 + Math.sin(st * 2.7) * 0.5,
+      Math.sin(st * 1.7 + 2) * 0.4,
+      Math.sin(st * 1.1 + 4) * 0.5,
+    ).multiplyScalar(shake * 0.4);
+    this.camera.position.copy(this.pos).add(_shake);
+
+    // look at the kart, rising slightly as the sweep completes
+    _look.set(ax, ay + 1.15 + 0.35 * e, az);
+    this.camera.lookAt(_look);
+    // a touch of dutch tilt through the widest part of the sweep reads as a
+    // broadcast camera rather than a locked-on follow cam
+    this.camera.rotation.z += Math.sin(e * Math.PI) * 0.04 + shake * Math.sin(st * 2.1) * 0.02;
+
+    this._updateFov(C.fovBase + (4 - 9 * e) * this.fovScale, dt);
   }
 
   _updateFov(targetFov, dt) {

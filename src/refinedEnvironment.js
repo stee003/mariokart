@@ -3,6 +3,7 @@
 // time-based animation. No external assets, per-frame randoms or extra lights.
 import * as THREE from '../lib/three.module.js';
 import { standard, glow, yaw, at, mesh, batcher, clearOfRoad, fascia, sign, atmosphere } from './expeditionEnvironment.js';
+import { flameHazardRadius } from './track.js';
 
 function kit(sky, fog, ground, road, accent, dark, sun, depth = 5) {
   return {
@@ -127,7 +128,10 @@ function furniture(group,track,b,kit,state) {
       });
     }
     if(o.type==='flamejet') {
-      const halo=mesh(group,'Vent warning ring',new THREE.RingGeometry(o.radius+.3,o.radius+.7,24),glow(0xffcd86),at(p,spec.lat,.09));halo.rotation.x=-Math.PI/2;
+      // Ring sized to the flame cone's real footprint (see flameHazardRadius)
+      // so the painted warning matches the collider exactly.
+      const burn=flameHazardRadius(o.radius);
+      const halo=mesh(group,'Vent warning ring',new THREE.RingGeometry(burn*.86,burn,24),glow(0xffcd86),at(p,spec.lat,.09));halo.rotation.x=-Math.PI/2;
       state.extras.push(()=>halo.material.color.setHex(o.active?0xff7459:0xffdca0));
     }
   }
