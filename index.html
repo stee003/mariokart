@@ -262,7 +262,97 @@
           <button class="btn btn-primary" id="btn-mode-gp" data-i18n="menu.grandprix">Grand Prix</button>
           <button class="btn btn-primary" id="btn-mode-tt" data-i18n="menu.timetrial">Time Trial</button>
           <button class="btn btn-primary" id="btn-mode-battle" data-i18n="menu.battle">Battle Mode</button>
+          <button class="btn btn-primary online-btn" id="btn-mode-online" data-i18n="online.title">Online Multiplayer</button>
           <button class="btn" id="btn-mode-back" data-i18n="menu.back" data-nav-back>Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ONLINE BROWSER ===================== -->
+    <div id="screen-online" class="screen hidden">
+      <div class="menu-card wide-card scrollable-card online-card">
+        <h2 data-i18n="online.title">Online Multiplayer</h2>
+        <div class="online-subtitle" data-i18n="online.subtitle">Race friends around the world</div>
+
+        <div class="online-row">
+          <label data-i18n="online.playerName">Your name</label>
+          <input id="online-name" class="online-input" maxlength="24" placeholder="Racer" />
+        </div>
+
+        <div class="online-status">
+          <span id="online-status-text" data-i18n="online.connecting">Connecting…</span>
+          <span id="online-ping"></span>
+        </div>
+
+        <div class="online-create">
+          <h3 data-i18n="online.create">Create Lobby</h3>
+          <div class="online-row">
+            <input id="online-create-name" class="online-input" maxlength="48" placeholder="My Race" />
+            <select id="online-create-track" class="online-select"></select>
+            <select id="online-create-max" class="online-select">
+              <option value="2">2 players</option>
+              <option value="4">4 players</option>
+              <option value="6">6 players</option>
+              <option value="8" selected>8 players</option>
+            </select>
+            <button class="btn btn-primary btn-small" id="btn-online-create" data-i18n="online.create">Create Lobby</button>
+          </div>
+        </div>
+
+        <div class="online-join-id">
+          <input id="online-join-id" class="online-input" maxlength="12" placeholder="Lobby ID" />
+          <button class="btn btn-small" id="btn-online-join-id" data-i18n="online.joinById">Join by ID</button>
+          <button class="btn btn-small" id="btn-online-refresh" data-i18n="online.refresh">Refresh</button>
+        </div>
+
+        <div class="online-lobbies-head">
+          <h3 data-i18n="online.lobbies">Lobbies</h3>
+          <span id="online-lobby-count"></span>
+        </div>
+        <div id="online-lobby-list" class="list-scroll online-lobby-list"></div>
+
+        <button class="btn" id="btn-online-back" data-i18n="menu.back" data-nav-back>Back</button>
+      </div>
+    </div>
+
+    <!-- ===================== ONLINE LOBBY ===================== -->
+    <div id="screen-onlinelobby" class="screen hidden">
+      <div class="menu-card wide-card scrollable-card online-card">
+        <div class="online-lobby-header">
+          <h2 id="online-lobby-name">Lobby</h2>
+          <div class="online-lobby-meta">
+            <span id="online-lobby-id"></span>
+            <span id="online-lobby-track"></span>
+            <span id="online-lobby-count2"></span>
+          </div>
+        </div>
+
+        <div class="online-lobby-split">
+          <div class="online-players-pane">
+            <h3 data-i18n="online.players">Players</h3>
+            <div id="online-player-list" class="list-scroll"></div>
+            <div class="online-host-controls">
+              <div class="online-row">
+                <label data-i18n="online.track">Track</label>
+                <select id="online-lobby-track-select" class="online-select"></select>
+              </div>
+              <div class="menu-buttons">
+                <button class="btn btn-primary" id="btn-online-ready" data-i18n="online.ready">Ready</button>
+                <button class="btn btn-primary" id="btn-online-start" data-i18n="online.start">Start Race</button>
+                <button class="btn" id="btn-online-leave" data-i18n="online.leave">Leave</button>
+              </div>
+              <div id="online-lobby-status" class="online-status-small"></div>
+            </div>
+          </div>
+
+          <div class="online-chat-pane">
+            <h3 data-i18n="online.chat">Chat</h3>
+            <div id="online-chat-log" class="online-chat-log"></div>
+            <div class="online-chat-input-row">
+              <input id="online-chat-input" class="online-input" maxlength="200" data-i18n-placeholder="online.chatPlaceholder" placeholder="Type a message…" />
+              <button class="btn btn-small" id="btn-online-chat-send" data-i18n="online.send">Send</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
