@@ -85,6 +85,12 @@ export class InputManager {
     this._gpPrevButtons = [];
     this._gpPressed = new Set();    // gamepad edge-triggered actions
 
+    // Touch controls feed the same action snapshot as keyboard and pads. The
+    // virtual stick writes analog values; button layouts write held actions.
+    this._touch = { throttle: 0, brake: 0, left: false, right: false, steer: 0,
+                    drift: false, trick: false, item: false, reset: false, pause: false };
+    this._touchPressed = new Set();
+
     // menu-navigation state: per-direction hold tracking + auto-repeat
     this._uiPrev = { up: false, down: false, left: false, right: false };
     this._uiFire = { up: false, down: false, left: false, right: false };
@@ -108,7 +114,7 @@ export class InputManager {
       this.down.add(e.code);
     });
     window.addEventListener('keyup', (e) => this.down.delete(e.code));
-    window.addEventListener('blur', () => { this.down.clear(); });
+    window.addEventListener('blur', () => { this.down.clear(); this.clearTouch(); });
   }
 
   // ---------------------------------------------------------------- bindings
@@ -226,6 +232,54 @@ export class InputManager {
     }
   }
 
+  // ------------------------------------------------------------ touch input
+  // Button actions use pointer-down/up so a press is responsive and remains
+  // held even when a finger slides slightly off the button (pointer capture is
+  // managed by the UI). Edge actions are recorded once on the initial press.
+  setTouchAction(action, active) {
+    if (!Object.prototype.hasOwnProperty.call(this._touch, action) || action === 'steer') return;
+    const next = !!active;
+    const was = !!this._touch[action];
+    this._touch[action] = next;
+    if (next && !was && ['trick', 'item', 'reset', 'pause'].includes(action)) {
+      this._touchPressed.add(action);
+    }
+  }
+
+  // x/y use ordinary screen coordinates: right is +x, down is +y. The kart's
+  // steering convention is inverted once here, at the input boundary.
+  setTouchStick(x, y) {
+    const sx = Math.max(-1, Math.min(1, Number(x) || 0));
+    const sy = Math.max(-1, Math.min(1, Number(y) || 0));
+    this._touch.steer = -sx;
+    this._touch.throttle = Math.max(0, -sy);
+    this._touch.brake = Math.max(0, sy);
+  }
+
+  clearTouch() {
+    Object.assign(this._touch, {
+      throttle: 0, brake: 0, left: false, right: false, steer: 0,
+      drift: false, trick: false, item: false, reset: false, pause: false,
+    });
+    this._touchPressed.clear();
+  }
+
+  _touchActionDown(action) {
+    const t = this._touch;
+    switch (action) {
+      case 'throttle': return t.throttle > 0;
+      case 'brake': return t.brake > 0;
+      case 'left': return t.left || t.steer > 0.18;
+      case 'right': return t.right || t.steer < -0.18;
+      case 'drift': return !!t.drift;
+      case 'trick': return !!t.trick;
+      case 'item': return !!t.item;
+      case 'reset': return !!t.reset;
+      case 'pause': return !!t.pause;
+      default: return false;
+    }
+  }
+
   // ---------------------------------------------------------- menu queries
   // True on the frame a pad direction fires (including auto-repeat).
   uiPressed(dir) { return this.enabled && !!this._uiFire[dir]; }
@@ -255,12 +309,14 @@ export class InputManager {
   // ------------------------------------------------------------------ queries
   isDown(action) {
     if (!this.enabled) return false;
-    return this.keymap[action].some((c) => this.down.has(c)) || this._gpActionDown(action);
+    return this.keymap[action].some((c) => this.down.has(c)) ||
+      this._gpActionDown(action) || this._touchActionDown(action);
   }
 
   wasPressed(action) {
     if (!this.enabled) return false;
-    return this.keymap[action].some((c) => this.pressed.has(c)) || this._gpPressed.has(action);
+    return this.keymap[action].some((c) => this.pressed.has(c)) ||
+      this._gpPressed.has(action) || this._touchPressed.has(action);
   }
 
   // Keyboard-only held check (snapshot merges gamepad separately so analog
@@ -277,14 +333,16 @@ export class InputManager {
     // controls: A/← and stick-left turn left; D/→ and stick-right turn right.
     const kSteer = (this._kbDown('left') ? 1 : 0) + (this._kbDown('right') ? -1 : 0);
     const gp = this._gp;
-    // keyboard steer and stick steer add; opposite directions cancel cleanly
-    let steer = kSteer + gp.steer + gp.steerDigital;
+    // Keyboard steer, physical stick and virtual touch stick add; opposite
+    // directions cancel cleanly. Discrete touch arrows share the same axes.
+    const touchSteer = (this._touch.left ? 1 : 0) - (this._touch.right ? 1 : 0);
+    let steer = kSteer + gp.steer + gp.steerDigital + touchSteer + this._touch.steer;
     steer = Math.max(-1, Math.min(1, steer));
     return {
-      throttle: Math.max(this._kbDown('throttle') ? 1 : 0, gp.throttle),
-      brake: Math.max(this._kbDown('brake') ? 1 : 0, gp.brake),
+      throttle: Math.max(this._kbDown('throttle') ? 1 : 0, gp.throttle, this._touch.throttle),
+      brake: Math.max(this._kbDown('brake') ? 1 : 0, gp.brake, this._touch.brake),
       steer,
-      drift: this._kbDown('drift') || !!this._gp.buttons[2] || !!this._gp.buttons[4],
+      drift: this._kbDown('drift') || !!this._gp.buttons[2] || !!this._gp.buttons[4] || !!this._touch.drift,
       trick: this.wasPressed('trick'),
       item: this.wasPressed('item'),
     };
@@ -293,5 +351,6 @@ export class InputManager {
   endFrame() {
     this.pressed.clear();
     this._gpPressed.clear();
+    this._touchPressed.clear();
   }
 }

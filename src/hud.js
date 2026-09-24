@@ -361,6 +361,9 @@ export class HUDManager {
     for (const node of document.querySelectorAll('[data-i18n]')) {
       node.textContent = this.i18n.t(node.dataset.i18n);
     }
+    for (const node of document.querySelectorAll('[data-i18n-aria-label]')) {
+      node.setAttribute('aria-label', this.i18n.t(node.dataset.i18nAriaLabel));
+    }
     this.el.boostLabel.textContent = this.i18n.t('hud.boost');
     this.el.wrongway.textContent = this.i18n.t('race.wrongWay');
     this._lastPos = -1;

@@ -52,6 +52,7 @@ import { CHASSIS } from './content/chassis.js';
 import { WHEELS } from './content/wheels.js';
 import { PAINTS } from './content/cosmetics.js';
 import { OnlineClient } from './onlineMultiplayer.js';
+import { GAMEPLAY_ASPECT, fitAspectViewport, detectMobileDevice } from './mobile.js';
 
 const FIXED_DT = 1 / 60;
 
@@ -65,6 +66,7 @@ class Game {
     this.save = new SaveManager();
     this.i18n = new LocalizationManager(this.save);
     this.input = new InputManager(this.save);
+    this.isMobileDevice = detectMobileDevice(window, navigator);
     this.audio = new AudioManager(this.save);
     this.music = new MusicManager(this.save);
     this.records = new RecordsStore(this.save);
@@ -102,13 +104,14 @@ class Game {
     // renderer ---------------------------------------------------------------
     const canvas = document.getElementById('game');
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.isMobileDevice ? 1.5 : 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(
-      CONFIG.camera.fovBase, window.innerWidth / window.innerHeight, 0.1, 1600);
+      CONFIG.camera.fovBase, GAMEPLAY_ASPECT, 0.1, 1600);
 
     // shared render resources (survive track switches) ---------------------------
     this.dust = new ParticlePool(this.scene, CONFIG.particles.dustCount, false);
@@ -119,14 +122,32 @@ class Game {
 
     // accessibility settings reapplied over everything below
     this._applyA11y();
-    this.i18n.onChange(() => { document.documentElement.lang = this.i18n.lang; });
+    this.i18n.onChange(() => {
+      document.documentElement.lang = this.i18n.lang;
+      this._refreshFullscreenUI?.();
+      this._syncMobileUI?.();
+    });
     document.documentElement.lang = this.i18n.lang;
 
     this.trackId = this.save.get('lastTrack', 'sunforge_circuit');
     this._loadTrack(this.trackId, true);
 
     this.bindUI();
+    this._bindTouchControls();
     window.addEventListener('resize', () => this.onResize());
+    window.addEventListener('orientationchange', () => this.onResize());
+    window.visualViewport?.addEventListener?.('resize', () => this.onResize());
+    window.matchMedia?.('(pointer: coarse)')?.addEventListener?.('change', () => this.onResize());
+    document.addEventListener('fullscreenchange', () => {
+      this._refreshFullscreenUI();
+      this.onResize();
+    });
+    document.addEventListener('webkitfullscreenchange', () => {
+      this._refreshFullscreenUI();
+      this.onResize();
+    });
+    this.onResize();
+    this._syncMobileUI();
 
     // Browser autoplay policy: unlock audio on the first real interaction,
     // whichever device it comes from (button clicks already do this too).
@@ -141,9 +162,12 @@ class Game {
 
     // adaptive resolution: keep 60 fps on weaker GPUs by stepping the render
     // pixel ratio down (and back up when the headroom returns)
-    this._prLevels = [1, 1.25, 1.5, Math.min(window.devicePixelRatio || 1, 2)]
-      .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
+    const maxPixelRatio = Math.min(window.devicePixelRatio || 1, this.isMobileDevice ? 1.5 : 2);
+    const pixelRatioCandidates = [...(this.isMobileDevice ? [0.75, 1, 1.25] : [1, 1.25, 1.5]), maxPixelRatio];
+    this._prLevels = pixelRatioCandidates
+      .filter((v, i, arr) => v > 0 && v <= maxPixelRatio && arr.indexOf(v) === i)
       .sort((a, b) => a - b);
+    if (!this._prLevels.length) this._prLevels = [maxPixelRatio];
     this._prIndex = this._prLevels.length - 1;
     this._prAcc = 0; this._prN = 0;
 
@@ -348,6 +372,8 @@ class Game {
 
     click('btn-start', () => this.openModeSelect());
     click('btn-settings', () => { this.settingsReturn = 'screen-main'; this.openSettings(); });
+    click('btn-fullscreen', () => this._toggleFullscreen());
+    $('touch-fullscreen').addEventListener('click', () => this._toggleFullscreen());
     click('btn-settings-back', () => this.hud.showScreen(this.settingsReturn));
     click('btn-resume', () => this.setPaused(false));
     // Settings stay reachable mid-race: the pause menu opens the same screen
@@ -490,6 +516,18 @@ class Game {
        { value: 130, labelKey: 'settings.size.xlarge' }],
       () => this.save.get('uiScale', 100),
       (v) => { this.save.set('uiScale', v); this._applyA11y(); });
+
+    this._buildOptionGroup('control-mode-list',
+      [{ value: 'auto', labelKey: 'settings.control.auto' },
+       { value: 'touch', labelKey: 'settings.control.touch' },
+       { value: 'gamepad', labelKey: 'settings.control.gamepad' }],
+      () => this.save.get('controlMode', 'auto'),
+      (v) => { this.save.set('controlMode', v); this._syncMobileUI(); });
+    this._buildOptionGroup('touch-layout-list',
+      [{ value: 'joystick', labelKey: 'settings.layout.joystick' },
+       { value: 'buttons', labelKey: 'settings.layout.buttons' }],
+      () => this.save.get('touchLayout', 'joystick'),
+      (v) => { this.save.set('touchLayout', v); this._syncMobileUI(); });
 
     // key remapping
     this._renderKeysList();
@@ -1894,10 +1932,255 @@ class Game {
     if (!on) this.hud.hideScreens();
   }
 
+  // ---------------------------------------------------------- touch controls
+  _bindTouchControls() {
+    const root = document.getElementById('touch-controls');
+    const joystick = document.getElementById('touch-joystick');
+    if (!root || !joystick) return;
+
+    this._touchActionPointers = new Map();
+    this._touchStickPointer = null;
+    this._touchControlsVisible = null;
+
+    const releaseAction = (button, e) => {
+      const action = button.dataset.touchAction;
+      const pointers = this._touchActionPointers.get(action);
+      if (!pointers) return;
+      pointers.delete(e.pointerId ?? 1);
+      if (!pointers.size) {
+        this._touchActionPointers.delete(action);
+        this.input.setTouchAction(action, false);
+        button.classList.remove('is-pressed');
+      }
+    };
+
+    for (const button of root.querySelectorAll('[data-touch-action]')) {
+      button.addEventListener('pointerdown', (e) => {
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        const action = button.dataset.touchAction;
+        const pointerId = e.pointerId ?? 1;
+        let pointers = this._touchActionPointers.get(action);
+        if (!pointers) this._touchActionPointers.set(action, pointers = new Set());
+        if (!pointers.size) this.input.setTouchAction(action, true);
+        pointers.add(pointerId);
+        button.classList.add('is-pressed');
+        try { button.setPointerCapture?.(pointerId); } catch (_e) { /* capture is optional */ }
+      });
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+        button.addEventListener(type, (e) => releaseAction(button, e));
+      }
+    }
+
+    const knob = document.getElementById('touch-stick-knob');
+    const updateStick = (e) => {
+      const rect = joystick.getBoundingClientRect();
+      const radius = Math.max(1, Math.min(rect.width, rect.height) * 0.34);
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      const magnitude = Math.hypot(dx, dy);
+      const scale = magnitude > radius ? radius / magnitude : 1;
+      let x = dx * scale / radius;
+      let y = dy * scale / radius;
+      const amount = Math.min(1, Math.hypot(x, y));
+      const deadZone = 0.12;
+      if (amount <= deadZone) {
+        x = 0; y = 0;
+      } else {
+        const remap = ((amount - deadZone) / (1 - deadZone)) / amount;
+        x *= remap; y *= remap;
+      }
+      this.input.setTouchStick(x, y);
+      if (knob) {
+        const displayRadius = radius * 0.78;
+        knob.style.transform = `translate(calc(-50% + ${x * displayRadius}px), calc(-50% + ${y * displayRadius}px))`;
+      }
+    };
+    const endStick = (e) => {
+      if (this._touchStickPointer !== (e.pointerId ?? 1)) return;
+      this._touchStickPointer = null;
+      this.input.setTouchStick(0, 0);
+      joystick.classList.remove('is-active');
+      if (knob) knob.style.transform = 'translate(-50%, -50%)';
+    };
+    joystick.addEventListener('pointerdown', (e) => {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      if (this._touchStickPointer !== null) return;
+      this._touchStickPointer = e.pointerId ?? 1;
+      joystick.classList.add('is-active');
+      updateStick(e);
+      try { joystick.setPointerCapture?.(this._touchStickPointer); } catch (_e) { /* capture is optional */ }
+    });
+    joystick.addEventListener('pointermove', (e) => {
+      if (this._touchStickPointer === (e.pointerId ?? 1)) {
+        if (e.cancelable) e.preventDefault();
+        updateStick(e);
+      }
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      joystick.addEventListener(type, endStick);
+    }
+
+    window.addEventListener('blur', () => this._clearTouchControlState());
+  }
+
+  _clearTouchControlState() {
+    this.input.clearTouch();
+    this._touchActionPointers?.clear();
+    this._touchStickPointer = null;
+    for (const button of document.querySelectorAll('#touch-controls [data-touch-action]')) {
+      button.classList.remove('is-pressed');
+    }
+    document.getElementById('touch-joystick')?.classList.remove('is-active');
+    const knob = document.getElementById('touch-stick-knob');
+    if (knob) knob.style.transform = 'translate(-50%, -50%)';
+  }
+
+  _syncMobileUI() {
+    const mobile = !!this.isMobileDevice;
+    const layout = this.save.get('touchLayout', 'joystick') === 'buttons' ? 'buttons' : 'joystick';
+    if (document.body.dataset.touchLayout !== layout) document.body.dataset.touchLayout = layout;
+
+    const preference = this.save.get('controlMode', 'auto');
+    const hasPad = this.input.gamepadConnected;
+    // Auto prefers an attached pad; Touch keeps the overlay alongside a pad;
+    // Gamepad priority falls back to touch if no controller is actually found.
+    const touchAvailable = mobile && (preference === 'touch' || !hasPad);
+    const overlay = this._visibleScreenId();
+    const canDrive = this.appState === 'race' && !this.race.paused &&
+      this.race.state !== 'results' && !overlay;
+    const visible = touchAvailable && canDrive;
+    const controls = document.getElementById('touch-controls');
+    if (controls && this._touchControlsVisible !== visible) {
+      controls.classList.toggle('hidden', !visible);
+      controls.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (!visible) this._clearTouchControlState();
+      this._touchControlsVisible = visible;
+    }
+
+    const status = document.getElementById('gamepad-status');
+    if (status) {
+      const key = preference === 'gamepad' && !hasPad
+        ? 'settings.gamepadFallback'
+        : (hasPad ? 'settings.gamepadConnected' : 'settings.gamepadNotConnected');
+      const text = this.i18n.t(key);
+      if (status.textContent !== text) status.textContent = text;
+    }
+
+    const help = document.getElementById('main-controls-help');
+    if (help) {
+      const text = this.i18n.t(mobile ? 'controls.mobile' : 'controls.help');
+      if (help.textContent !== text) help.textContent = text;
+    }
+    this._refreshFullscreenUI();
+  }
+
+  _refreshFullscreenUI() {
+    if (typeof document === 'undefined') return;
+    const fullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement || document.webkitIsFullScreen);
+    const label = this.i18n.t(fullscreen ? 'display.exitFullscreen' : 'display.fullscreen');
+    if (this._fullscreenUiState === fullscreen && this._fullscreenUiLabel === label) return;
+    this._fullscreenUiState = fullscreen;
+    this._fullscreenUiLabel = label;
+    const settingsButton = document.getElementById('btn-fullscreen');
+    if (settingsButton) {
+      if (settingsButton.textContent !== label) settingsButton.textContent = label;
+      settingsButton.setAttribute('aria-label', label);
+      settingsButton.classList.toggle('selected', fullscreen);
+    }
+    const touchButton = document.getElementById('touch-fullscreen');
+    if (touchButton) {
+      touchButton.textContent = fullscreen ? '⤢' : '⛶';
+      touchButton.setAttribute('aria-label', label);
+      touchButton.title = label;
+    }
+  }
+
+  _showFullscreenMessage(key) {
+    const message = this.i18n.t(key);
+    const status = document.getElementById('fullscreen-status');
+    if (status && this._visibleScreenId() === 'screen-settings') {
+      status.textContent = message;
+      status.classList.remove('hidden');
+    } else {
+      this.hud.notify(message);
+    }
+  }
+
+  async _toggleFullscreen() {
+    const doc = document;
+    const fullscreen = !!(doc.fullscreenElement || doc.webkitFullscreenElement || doc.webkitIsFullScreen);
+    try {
+      if (fullscreen) {
+        const exit = doc.exitFullscreen || doc.webkitExitFullscreen;
+        if (!exit) {
+          this._showFullscreenMessage('display.fullscreenUnsupported');
+          return false;
+        }
+        await exit.call(doc);
+      } else {
+        const target = doc.documentElement;
+        const request = target?.requestFullscreen || target?.webkitRequestFullscreen;
+        if (!request) {
+          this._showFullscreenMessage('display.fullscreenUnsupported');
+          return false;
+        }
+        try {
+          await request.call(target, { navigationUI: 'hide' });
+        } catch (_e) {
+          await request.call(target);
+        }
+      }
+      const status = document.getElementById('fullscreen-status');
+      status?.classList.add('hidden');
+      if (status) status.textContent = '';
+      this._refreshFullscreenUI();
+      this.onResize();
+      return true;
+    } catch (_e) {
+      this._showFullscreenMessage('display.fullscreenFailed');
+      this._refreshFullscreenUI();
+      return false;
+    }
+  }
+
   onResize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
+    const width = window.innerWidth || 1;
+    const height = window.innerHeight || 1;
+    this.isMobileDevice = detectMobileDevice(window, navigator);
+    document.body.classList.toggle('mobile-device', this.isMobileDevice);
+    this.gameViewport = fitAspectViewport(width, height, GAMEPLAY_ASPECT);
+    this.camera.aspect = GAMEPLAY_ASPECT;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(width, height);
+
+    const style = document.documentElement.style;
+    style.setProperty('--game-left', `${this.gameViewport.x}px`);
+    style.setProperty('--game-top', `${this.gameViewport.y}px`);
+    style.setProperty('--game-width', `${this.gameViewport.width}px`);
+    style.setProperty('--game-height', `${this.gameViewport.height}px`);
+    document.body.dataset.orientation = height > width ? 'portrait' : 'landscape';
+    this._syncMobileUI();
+  }
+
+  _renderGameFrame() {
+    const width = window.innerWidth || 1;
+    const height = window.innerHeight || 1;
+    const view = this.gameViewport || fitAspectViewport(width, height, GAMEPLAY_ASPECT);
+    const bottom = height - view.y - view.height;
+
+    // Clear the full device surface to the letterbox tone, then render the
+    // scene into a strict 16:9 scissor viewport (also on portrait devices).
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, width, height);
+    this.renderer.setClearColor(0x0d0705, 1);
+    this.renderer.clear(true, true, true);
+    this.renderer.setScissorTest(true);
+    this.renderer.setViewport(view.x, bottom, view.width, view.height);
+    this.renderer.setScissor(view.x, bottom, view.width, view.height);
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.setScissorTest(false);
   }
 
   // ------------------------------------------------------------- race events
@@ -2456,6 +2739,7 @@ class Game {
     // Controller menu navigation runs first so an A press on a highlighted
     // button is resolved before the frame's race logic looks at the pad.
     this.uiNav.update();
+    this._syncMobileUI();
 
     if (this.appState === 'menu') {
       this.camCtl.updateMenu(rawDt);
@@ -2514,6 +2798,7 @@ class Game {
       }
     } else if (this.mode === 'online') {
       // -------------------- ONLINE RACE
+      if (this.input.wasPressed('pause')) this._handlePauseToggle();
       if (this.race.state === 'results' && this.input.keyPressed('confirm')) {
         // results handled by online buttons, but allow confirm to return to lobby
         if (this._onlineFinishedShown) this._onlineReturnToLobby();
@@ -2707,7 +2992,10 @@ class Game {
     this.sparks.update(rawDt);
     this.env.state.update(rawDt, this.time);
 
-    this.renderer.render(this.scene, this.camera);
+    // Pause/results/menu transitions can happen during this frame; update the
+    // on-screen controller immediately so stale held buttons are released.
+    this._syncMobileUI();
+    this._renderGameFrame();
     this.input.endFrame();
 
     // perf adaptation + developer overlay (?debug=1)
