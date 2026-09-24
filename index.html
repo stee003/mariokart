@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="description" content="Sunforge Racers - an original arcade kart racer for the browser. Race, drift and boost across 16 tracks." />
   <meta name="theme-color" content="#1a0f08" />
   <title>Sunforge Racers</title>
@@ -75,6 +75,49 @@
       </div>
     </div>
 
+    <!-- ===================== TOUCH CONTROLS ===================== -->
+    <div id="touch-controls" class="touch-controls hidden" role="group"
+         data-i18n-aria-label="touch.controls" aria-label="Touch controls" aria-hidden="true">
+      <div class="touch-global-actions">
+        <button id="touch-fullscreen" class="touch-icon-button" type="button"
+                data-i18n-aria-label="touch.fullscreen" aria-label="Enter fullscreen" title="Enter fullscreen">⛶</button>
+        <button id="touch-pause" class="touch-icon-button" type="button"
+                data-i18n-aria-label="touch.pause" aria-label="Pause" title="Pause" data-touch-action="pause">Ⅱ</button>
+      </div>
+
+      <div id="touch-joystick" class="virtual-joystick touch-drive-control"
+           role="group" data-i18n-aria-label="touch.joystick" aria-label="Virtual steering and throttle joystick">
+        <span class="stick-ring" aria-hidden="true"></span>
+        <span id="touch-stick-knob" class="stick-knob" aria-hidden="true"></span>
+        <span class="stick-caption" aria-hidden="true">DRIVE</span>
+      </div>
+
+      <div class="touch-dpad touch-drive-control" role="group"
+           data-i18n-aria-label="touch.directionPad" aria-label="Directional touch controls">
+        <button class="touch-button dpad-up" type="button" data-i18n-aria-label="keys.action.throttle" aria-label="Accelerate" data-touch-action="throttle">▲</button>
+        <button class="touch-button dpad-left" type="button" data-i18n-aria-label="keys.action.left" aria-label="Steer left" data-touch-action="left">◀</button>
+        <span class="dpad-centre" aria-hidden="true">+</span>
+        <button class="touch-button dpad-right" type="button" data-i18n-aria-label="keys.action.right" aria-label="Steer right" data-touch-action="right">▶</button>
+        <button class="touch-button dpad-down" type="button" data-i18n-aria-label="keys.action.brake" aria-label="Brake" data-touch-action="brake">▼</button>
+      </div>
+
+      <div class="touch-action-cluster" role="group"
+           data-i18n-aria-label="touch.gameplayActions" aria-label="Gameplay actions">
+        <button class="touch-button action-drift" type="button" data-i18n-aria-label="keys.action.drift" aria-label="Drift" data-touch-action="drift">
+          <span aria-hidden="true">◉</span><span data-i18n="touch.drift">DRIFT</span>
+        </button>
+        <button class="touch-button action-item" type="button" data-i18n-aria-label="keys.action.item" aria-label="Use power-up" data-touch-action="item">
+          <span aria-hidden="true">✦</span><span data-i18n="touch.item">ITEM</span>
+        </button>
+        <button class="touch-button action-trick" type="button" data-i18n-aria-label="keys.action.trick" aria-label="Aerial trick" data-touch-action="trick">
+          <span aria-hidden="true">↗</span><span data-i18n="touch.trick">TRICK</span>
+        </button>
+        <button class="touch-button action-reset" type="button" data-i18n-aria-label="keys.action.reset" aria-label="Reset to track" data-touch-action="reset">
+          <span aria-hidden="true">↺</span><span data-i18n="touch.reset">RESET</span>
+        </button>
+      </div>
+    </div>
+
     <!-- ===================== MAIN MENU ===================== -->
     <div id="screen-main" class="screen main-screen">
       <div class="menu-card main-menu-card">
@@ -130,7 +173,7 @@
         <div class="main-controls">
           <div class="control-status" aria-hidden="true"><span></span></div>
           <div>
-            <div class="controls-hint" data-i18n="controls.help">Controls</div>
+            <div id="main-controls-help" class="controls-hint" data-i18n="controls.help">Controls</div>
             <div class="controls-hint gamepad-hint" data-i18n="controls.gamepad">Gamepad</div>
           </div>
         </div>
@@ -148,6 +191,21 @@
             <button class="btn btn-small" id="lang-it">Italiano</button>
           </div>
         </div>
+        <div class="setting-row setting-column">
+          <label data-i18n="settings.controls">Controls</label>
+          <div class="opt-toggle" id="control-mode-list"></div>
+          <div class="setting-note" id="gamepad-status" role="status" aria-live="polite"></div>
+          <div class="setting-note" data-i18n="settings.gamepadHint">Standard Bluetooth controllers are supported.</div>
+        </div>
+        <div class="setting-row setting-column">
+          <label data-i18n="settings.touchLayout">Touch layout</label>
+          <div class="opt-toggle" id="touch-layout-list"></div>
+        </div>
+        <div class="setting-row">
+          <label data-i18n="settings.fullscreen">Fullscreen</label>
+          <button class="btn btn-small" id="btn-fullscreen" data-i18n="display.fullscreen">Enter fullscreen</button>
+        </div>
+        <div id="fullscreen-status" class="setting-note hidden" role="status" aria-live="polite"></div>
         <div class="setting-row">
           <label data-i18n="settings.camDist">Camera distance</label>
           <input type="range" id="cam-dist" min="6" max="12" step="0.1" aria-label="Camera distance" />
