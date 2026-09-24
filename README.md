@@ -69,7 +69,8 @@ voice-over; all cues are visual + musical).
 - 16 hand-laid tracks across twelve biomes (desert, forest, city, mountain,
   volcano, underwater, factory, islands, ruins, storm, crystal, space) —
   each with a signed shortcut, boost pads, ramps, item boxes, hazards and a
-  themed music seed.
+  themed music seed. Verdant Loop's Lanternwood adds safe ambient wildlife,
+  shallow-water wakes and a raised-boardwalk fall rescue.
 - 14 pilots (plus unlockables), customizable karts: paint, chassis, wheels,
   trail — stat-bearing parts you mix in the **garage**.
 - 22 original items: position-weighted rolls, forward shells, homing eels,
@@ -98,6 +99,8 @@ The QA matrix is seeded, so CI results are reproducible rather than lucky.
   vehicle physics, drift mechanics, item system, AI behavior, multiplayer,
   localization, save data, customization, progression, build/deployment,
   server setup, troubleshooting.
+- [VERDANT_LOOP.md](VERDANT_LOOP.md) — Lanternwood scenery, interactive water,
+  wildlife clearance and raised-edge recovery.
 - [MULTIPLAYER.md](MULTIPLAYER.md) — authoritative online-service contract and
   production checklist (the game ships offline-first).
 - [DEVELOPMENT_REPORT.md](DEVELOPMENT_REPORT.md) — incremental build history and

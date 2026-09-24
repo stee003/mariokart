@@ -15,6 +15,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { buildCharacter } from './characterMesh.js';
+import { CONFIG } from './config.js';
 
 function matFor(color, finish) {
   switch (finish) {
@@ -420,6 +421,21 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     suspension: vehicle.suspension || 0,
     stamp: -1,
   });
+  // Placement/reset is a discontinuity, not a movement step. Rebase BOTH
+  // interpolation endpoints, including when R was pressed between two steps:
+  // otherwise the first frame stretches the kart (and camera) across the map.
+  if (kartVis._poseRevision !== vehicle.poseRevision) {
+    prev.x = prev.cx = vehicle.pos.x;
+    prev.y = prev.cy = vehicle.y;
+    prev.z = prev.cz = vehicle.pos.z;
+    prev.yaw = prev.cyaw = vehicle.yaw;
+    prev.pitch = prev.cpitch = vehicle.terrainPitch || 0;
+    prev.roll = prev.croll = vehicle.terrainRoll || 0;
+    prev.suspension = prev.csuspension = vehicle.suspension || 0;
+    prev.stamp = vehicle.stepId;
+    kartVis._shadowHint = { main: -1, sc: -1 };
+    kartVis._poseRevision = vehicle.poseRevision;
+  }
   // A new physics step is detected by the vehicle's own step counter, so the
   // previous pose is only latched once per step, never once per frame.
   if (vehicle.stepId !== prev.stamp) {
@@ -533,16 +549,21 @@ export function updateKartVisual(kartVis, vehicle, dt, time, alpha = 1) {
     probe.set(g.position.x, g.position.y, g.position.z);
     shadowSurf = vehicle.track.surface(probe, hint);
   }
-  const groundY = shadowSurf ? shadowSurf.y : vehicle.y;
+  const pastDeck = shadowSurf && vehicle.track?.recoveryFloorY != null &&
+    Math.abs(shadowSurf.lateral) - shadowSurf.width / 2 > CONFIG.recovery.deckOverhang &&
+    shadowSurf.y - vehicle.track.recoveryFloorY > CONFIG.recovery.elevatedRoadHeight;
+  const groundY = pastDeck ? vehicle.track.recoveryFloorY
+    : shadowSurf ? shadowSurf.y : vehicle.y;
   sh.position.set(g.position.x, groundY + 0.04, g.position.z);
-  if (shadowSurf) {
+  if (pastDeck) _shadowNormal.set(0, 1, 0);
+  else if (shadowSurf) {
     const gx = shadowSurf.dir.x * (shadowSurf.slope || 0)
       + shadowSurf.right.x * (shadowSurf.bank || 0);
     const gz = shadowSurf.dir.z * (shadowSurf.slope || 0)
       + shadowSurf.right.z * (shadowSurf.bank || 0);
     _shadowNormal.set(-gx, 1, -gz).normalize();
-    sh.quaternion.setFromUnitVectors(_shadowLocalNormal, _shadowNormal);
   }
+  if (shadowSurf) sh.quaternion.setFromUnitVectors(_shadowLocalNormal, _shadowNormal);
   const h = Math.max(0, g.position.y - groundY);
   const s = Math.max(0.45, 1 - h * 0.12);
   sh.scale.set(s, s, s);

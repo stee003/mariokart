@@ -139,6 +139,8 @@ export const CONFIG = {
     fallHeight: 4.5,             // metres below the road surface that counts as a fall
     elevatedDelay: 0.75,         // seconds to wait before respawning off a raised edge
     hardOffDelay: 0.85,          // seconds to wait before respawning far outside the road
+    elevatedRoadHeight: 2.5,    // minimum deck-to-floor clearance for an edge fall
+    deckOverhang: 2.8,          // visible apron beyond the road's half width
   },
 
   ai: {

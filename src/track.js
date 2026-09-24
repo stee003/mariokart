@@ -126,6 +126,12 @@ export class TrackManager {
     this.samples = [];
     this.time = 0;
     this._buildCenterline();
+    // Only Verdant's raised boardwalk has a physical forest floor below its
+    // off-road edge. It matches the world ground (lowest road - 0.6m); the
+    // road's nearest-point query itself extends indefinitely sideways.
+    this.recoveryFloorY = def.id === 'verdant_loop'
+      ? Math.min(...this.samples.map(p => p.pos.y)) - 0.6 : null;
+    this.waterSurfaces = [];   // populated by its environment, not track data
     this._buildShortcut();
     this._buildFeatures();
     this._buildRacingLine();
