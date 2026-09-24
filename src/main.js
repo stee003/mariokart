@@ -2385,6 +2385,49 @@ class Game {
           ), { color: 0x40f0e0, size: 0.35, life: 0.3, gravity: 6, drag: 1.5 });
         }
       }
+
+      // === Sunforge water physics: puddle splash, realistic drag & ripples ===
+      if (this.env?.state?.puddles?.length) {
+        for (const pud of this.env.state.puddles) {
+          const dx = v.pos.x - pud.center.x;
+          const dz = v.pos.z - pud.center.z;
+          const distSq = dx*dx + dz*dz;
+          const r = pud.radius + 0.9;
+          if (distSq < r*r && v.grounded && Math.abs(v.y - pud.center.y) < 1.4) {
+            // hydrodynamic drag - water resists forward motion proportionally
+            if (v.speedAbs > 1) {
+              const drag = Math.min(0.75, v.speedAbs * 0.028);
+              v.vel.multiplyScalar(1 - drag * dt * 2.0);
+              v.fSpeed *= (1 - drag * dt * 1.1);
+            }
+            const intensity = Math.min(1, v.speedAbs / 18);
+            if (intensity > 0.12 && Math.random() < 0.52) {
+              const n = Math.floor(2 + intensity*5);
+              for (let i=0;i<n;i++) {
+                const ang = Math.random()*Math.PI*2;
+                const sp = 1.8 + Math.random()*3.5*intensity;
+                this.dust.spawn(_pp.set(v.pos.x, pud.center.y+0.12, v.pos.z), _pv.set(
+                  Math.cos(ang)*sp*0.7,
+                  1.1 + Math.random()*2.4,
+                  Math.sin(ang)*sp*0.7
+                ), { color: 0xa0d8e8, size: 0.46 + intensity*0.12, life: 0.52, growth: 0.85, drag: 1.7, gravity: 4.2 });
+                if (Math.random()<0.45) {
+                  this.sparks.spawn(_pp.set(v.pos.x + (Math.random()-0.5)*1.1, pud.center.y+0.20, v.pos.z + (Math.random()-0.5)*1.1), _pv.set(
+                    (Math.random()-0.5)*5*intensity,
+                    2 + Math.random()*2.8,
+                    (Math.random()-0.5)*5*intensity
+                  ), { color: 0xffffff, size: 0.22, life: 0.38, gravity: 9, drag: 1.9 });
+                }
+              }
+            }
+            pud._lastRipple = pud._lastRipple || 0;
+            if (this.time - pud._lastRipple > 0.16 && v.speedAbs > 3.5) {
+              pud._lastRipple = this.time;
+              if (this.env.state.spawnPuddleRipple) this.env.state.spawnPuddleRipple(v.pos);
+            }
+          }
+        }
+      }
     }
   }
 
