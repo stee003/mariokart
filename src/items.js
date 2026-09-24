@@ -1,40 +1,43 @@
 // ============================================================================
-// ItemSystem - runtime for the original power-up arsenal.
+// ItemSystem - runtime for the Sunforge arsenal (see content/items.js).
 //
 // Responsibilities:
 //   - item boxes (pickup, respawn)
 //   - position-weighted roulette (rollItem in content/items.js)
 //   - held item (one slot per kart) + activation
-//   - entity simulation: projectiles, hazards, zones, decoys, walls
+//   - entity simulation: projectiles, hazards, walls, zones, swarms, decoys
 //   - timed statuses -> per-frame vehicle mods (vehicle.mods)
 //   - events out (onEvent) for particles / HUD, audio hooks in
 //
-// The vehicle controller is NOT rewritten: it simply consumes a `mods`
-// object (speedMult, accelMult, steerMult, gripMult, jitter, noDrift,
-// intangible) that this system fills every frame.
+// The vehicle controller is NOT rewritten: it simply consumes a `mods` object
+// (speedMult, accelMult, steerMult, gripMult, jitter, noDrift, intangible)
+// that this system fills every frame.
+//
+// Effects are DATA, not item names. A spawned entity carries an `fx` record
+// describing what it does to a kart that touches it, so several items can share
+// one behaviour (a glass patch and a dust trail both slow you) and nothing in
+// the simulation has to know which catalog entry created it.
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
-import { ITEMS, rollItem } from './content/items.js';
-import { normalizeAngle } from './vehicle.js';
+import { ITEMS, rollItem, rollItemExcept } from './content/items.js';
+import { CONFIG } from './config.js';
+import { resolveObstacleContact, KART_HIT_BOTTOM, KART_HIT_TOP } from './track.js';
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 
-const HARMFUL = new Set(['anchor', 'snare', 'slip', 'stagger', 'siphonVictim', 'jitterZone',
-  'bloom', 'prism', 'ripple', 'swarmDrag', 'harpoonedVictim']);
+// Statuses a cleanse (Forge Ward, Echo Bell) is allowed to remove. Anything
+// the player would call "a debuff" belongs here; the signature is that it was
+// put on you by somebody else.
+const HARMFUL = new Set([
+  'stagger', 'blight', 'jinx', 'slip', 'slow', 'thornSpin', 'burnt', 'hexSlow',
+]);
 
-// Item boxes dragged by a magnet spring back to their authored position at
-// this rate (m/s); slower while a magnet is still active so the pull wins.
-const MAGNET_RETURN = 18;
-const MAGNET_RETURN_SLOW = 4;
-
-// Slipstream harpoon tether: the line releases inside MIN (already in the
-// slipstream) or beyond MAX (snapped), and drags the speared kart back by
-// REACTION of the pull the owner receives.
-const HARPOON_MIN_RANGE = 4.5;
-const HARPOON_MAX_RANGE = 70;
-const HARPOON_REACTION = 0.2;
+// A hit's severity. Weak hits (a single hornet) only nudge; full hits spin the
+// kart, dump its held item and cost real speed.
+const HIT_WEAK = 0.5;
+const HIT_FULL = 1;
 
 export class ItemSystem {
   constructor({ track, scene = null, onEvent = null, audio = null, i18n = null, rng = Math.random }) {
@@ -46,10 +49,10 @@ export class ItemSystem {
     this.rng = rng;
     this.enabled = true;
 
-    this.boxes = [];                // {pos, respawnT, mesh}
+    this.boxes = [];                // {pos, home, respawnT, mesh, s, lat}
     this.held = new Map();          // vehicle -> itemId | null
     this.statuses = new Map();      // vehicle -> [{type, t, dur, data}]
-    this.entities = [];             // projectiles / hazards / zones / decoys / walls
+    this.entities = [];             // projectiles / hazards / walls / zones ...
     this.shieldCharges = new Map(); // vehicle -> n
     this._tmp = new THREE.Vector3();
   }
@@ -60,7 +63,7 @@ export class ItemSystem {
       const p = this.track.pointAt(d.s);
       const pos = p.pos.clone().addScaledVector(p.right, d.lat);
       pos.y = p.pos.y + 1.1;
-      // `home` is the authored anchor a magnet-displaced box returns to
+      // `home` is the authored anchor the box always returns to
       return { pos, home: pos.clone(), respawnT: 0, mesh: null, s: d.s, lat: d.lat };
     });
   }
@@ -69,16 +72,22 @@ export class ItemSystem {
 
   grantBox(kart) {
     const v = kart.vehicle;
-    if (this.held.get(v)) return;
+    if (this.held.get(v)) return null;
     const status = this.statuses.get(v) || [];
-    if (status.some((s) => s.data?.intangible)) return;   // phased: no pickups
-    // position-based roulette
-    const pos = kart._racePos ?? 1;
-    const total = kart._raceTotal ?? 4;
-    const id = rollItem(this.rng, pos, total);
+    if (status.some((s) => s.data?.intangible)) return null;   // phased: no pickups
+    const id = this._roll(kart);
     this.held.set(v, id);
     this.audio?.itemSound('get');
     this.onEvent?.('itemGet', { itemId: id, kart, isPlayer: !!kart.isPlayer });
+    return id;
+  }
+
+  // Position-weighted pickup. Kept in one place so the Kiln Lottery rerolls
+  // through exactly the same maths as a box.
+  _roll(kart) {
+    const pos = kart._racePos ?? 1;
+    const total = kart._raceTotal ?? 4;
+    return rollItem(this.rng, pos, total);
   }
 
   // ------------------------------------------------------------- statuses
@@ -116,7 +125,10 @@ export class ItemSystem {
       const v = kart.vehicle;
       const list = this.statuses.get(v) || [];
       if (list.length === 0) { v.mods = null; continue; }
-      const m = { speedMult: 1, accelMult: 1, steerMult: 1, gripMult: 1, jitter: 0, noDrift: false, intangible: false, noItems: false };
+      const m = {
+        speedMult: 1, accelMult: 1, steerMult: 1, gripMult: 1,
+        jitter: 0, noDrift: false, intangible: false, noItems: false,
+      };
       for (const s of list) {
         const d = s.data || {};
         m.speedMult *= d.speedMult ?? 1;
@@ -127,7 +139,6 @@ export class ItemSystem {
         m.noDrift = m.noDrift || !!d.noDrift;
         m.intangible = m.intangible || !!d.intangible;
         m.noItems = m.noItems || !!d.noItems;
-        if (s.type === 'snare') m.steerMult *= -1;        // reversed steering
       }
       v.mods = m;
     }
@@ -147,10 +158,7 @@ export class ItemSystem {
     const v = kart.vehicle;
     const id = this.held.get(v);
     if (!id) return false;
-    // Phase shield is a defensive trade-off: untouchable, but unable to act.
-    // The `noItems` flag existed and was even aggregated into vehicle.mods,
-    // yet nothing ever checked it - a phased kart could fire freely while
-    // being immune to every reply.
+    // Glasswalk is a defensive trade-off: untouchable, but unable to act.
     if (this.hasNoItems(v)) return false;
     const def = ITEMS[id];
     if (!def) { this.held.set(v, null); return false; }
@@ -161,132 +169,195 @@ export class ItemSystem {
     return true;
   }
 
+  // Catalogue entry -> behaviour. Every branch is short: the interesting part
+  // lives in the shared spawners and in the entity update below.
   _activate(def, kart, karts) {
     const v = kart.vehicle;
     const p = def.params;
     switch (def.id) {
-      case 'flux_bolt':
-      case 'echo_snare':
-      case 'slipstream_harpoon': {
-        const target = this._targetAhead(kart, karts, 60);
-        this._spawnProjectile(def, v, target);
+      // ---- forward attack -------------------------------------------------
+      case 'cinder_lance':
+        this._spawnProjectile(def, v, null, { pierce: p.pierce });
         break;
-      }
-      case 'gravity_anchor': {
-        const target = this._leaderAhead(kart, karts);
-        if (target) this._applyHit(def, target, 'anchor', { speedMult: p.speedMult, noDrift: true }, p.duration);
-        break;
-      }
-      case 'kinetic_siphon': {
-        const target = this._targetAhead(kart, karts, p.maxRange);
-        // The owner only gains what the victim actually loses. Previously the
-        // buff was granted unconditionally, so siphoning a shielded rival was
-        // a free permanent speed boost that cost the target nothing.
-        if (target && this._applyHit(def, target, 'siphonVictim', { speedMult: 1 - p.drain }, p.duration)) {
-          this.addStatus(v, { type: 'siphonOwner', dur: p.duration,
-            data: { speedMult: 1 + p.drain, sourceVehicle: target.vehicle, maxRange: p.maxRange } });
+      case 'hornet_pod':
+        for (let i = 0; i < p.count; i++) {
+          const target = this._targetAhead(kart, karts, 62);
+          this._spawnProjectile(def, v, target, {
+            offset: (i - (p.count - 1) / 2) * p.spread,
+            speed: p.speed - i * 1.6,
+            weak: p.weakHit,
+          });
         }
         break;
-      }
-      case 'mirage_clone':
-        this.entities.push({ kind: 'decoy', def, owner: v, life: p.duration,
-          pos: this._behind(v, 5.5), flashRadius: p.flashRadius, absorbHits: p.absorbHits });
+      case 'glass_fang':
+        this._spawnProjectile(def, v, this._targetAhead(kart, karts, 60), { shatter: p.shatter });
         break;
-      case 'pulse_ring': {
-        const ring = { kind: 'pulse', def, owner: v, life: 0.6, pos: v.pos.clone(), radius: 0 };
-        // cleanse + clear nearby hazards (snapshot: _kill mutates the list)
-        for (const e of this.entities.slice()) {
-          if (e.kind === 'hazard' && e.owner !== v && e.pos.distanceTo(v.pos) < p.radius) {
-            this._kill(e);
-            v.boost.trigger(0, 'trick'); // small charge reward
-          }
+      case 'kiln_mortar': {
+        const target = this._leaderAhead(kart, karts) ?? this._targetAhead(kart, karts, 90);
+        if (!target) {
+          // nobody ahead: drop it far enough up the road that the karts coming
+          // behind have to deal with it (and that it is armed when they arrive)
+          const dist = Math.max(28, (v.fSpeed || 20) * p.flight * p.noTargetAhead);
+          this._spawnHazard(def, v, this._ahead(v, dist), { ...CRATER, radius: p.radius, armT: p.flight, flight: p.flight });
+          break;
         }
-        this.entities.push(ring);
-        this.cleanse(v);
+        const tv = target.vehicle;
+        // lead the target: where it will be when the shell lands
+        const land = _v1.copy(tv.pos)
+          .addScaledVector(_v2.copy(tv.vel).setY(0), p.flight * p.lead).clone();
+        land.y = this.track.surface(land, { main: -1, sc: -1 }).y + 0.4;
+        this._spawnHazard(def, v, land, { ...CRATER, radius: p.radius, armT: p.flight, flight: p.flight });
         break;
       }
-      case 'overdrive_core':
-        this.addStatus(v, { type: 'overdrive', dur: p.duration,
-          data: { speedMult: p.speedMult, accelMult: p.accelMult, steerMult: p.steerPenalty, noDrift: true, jitter: 0.08 } });
+
+      // ---- area denial ----------------------------------------------------
+      case 'slag_mine':
+        this._spawnHazard(def, v, this._behind(v, 4.5), ERUPT(p));
+        break;
+      case 'thorn_scatter':
+        for (let i = 0; i < p.count; i++) {
+          const side = (i - (p.count - 1) / 2) * p.spread;
+          this._spawnHazard(def, v, this._behindLateral(v, p.back, side), THORNS(p));
+        }
+        break;
+      case 'brass_bulwark':
+        this._spawnWall(def, v, { solid: true, slowMult: p.slowMult });
+        break;
+      case 'dust_veil':
+        this._spawnWall(def, v, { gripMult: p.gripMult, jitter: p.jitter, slipDur: p.slipDur });
+        break;
+
+      // ---- mobility -------------------------------------------------------
+      case 'sunflare':
+        v.boost.trigger(p.boostLevel, 'drift');
+        // shorter than the boost it comes with: the immunity is a launch
+        // window, not a licence
+        this.addStatus(v, { type: 'flare', dur: p.immune, data: { intangible: true } });
+        this.onEvent?.('itemBurst', { itemId: def.id, kart, pos: v.pos.clone(), radius: 7 });
+        break;
+      case 'ember_draft':
+        this.addStatus(v, {
+          type: 'draft', dur: p.duration,
+          data: { speedMult: p.speedMult, accelMult: p.accelMult, noDrift: true },
+        });
         v.boost.trigger(1, 'pad');
         break;
-      case 'vortex_mine':
-        this._spawnHazard(def, v, this._behind(v, 4.5));
+      case 'glasswalk':
+        this.addStatus(v, {
+          type: 'glasswalk', dur: p.duration,
+          data: { intangible: true, noItems: true, trail: p.trail, trailT: 0 },
+        });
         break;
-      case 'static_bloom':
-        this._spawnHazard(def, v, this._ahead(v, p.throwDist));
-        break;
-      case 'graviton_well':
-        this._spawnHazard(def, v, this._ahead(v, p.throwDist));
-        break;
-      case 'prism_wall':
-      case 'aurora_veil': {
-        const surf = v.surf || { dir: _v1.set(Math.sin(v.yaw), 0, Math.cos(v.yaw)), progress: 0 };
-        const dir = surf.dir ? surf.dir.clone() : _v1.set(Math.sin(v.yaw), 0, Math.cos(v.yaw)).clone();
-        const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
-        this.entities.push({ kind: 'wall', def, owner: v, life: p.life, pos: this._behind(v, 3),
-          dir, right, width: p.width, armT: 1.0 });
+      case 'dune_skip': {
+        const fwd = _v1.set(Math.sin(v.yaw), 0, Math.cos(v.yaw));
+        v.vel.addScaledVector(fwd, p.forward);
+        v.vy = Math.max(v.vy, p.launch);
+        v.grounded = false;
+        v.pendingFx.spin = false;
+        // a little less steering authority while airborne; it ends on landing
+        this.addStatus(v, { type: 'skip', dur: 1.4, data: { steerMult: p.airSteer } });
+        this.onEvent?.('itemBurst', { itemId: def.id, kart, pos: v.pos.clone(), radius: 5 });
         break;
       }
-      case 'phase_shield':
-        this.addStatus(v, { type: 'phase', dur: p.duration, data: { intangible: true, noItems: true } });
-        break;
-      case 'time_ripple':
-        this.entities.push({ kind: 'zone', def, owner: v, life: p.windup + p.duration,
-          pos: v.pos.clone(), radius: p.radius, slowMult: p.slowMult, windup: p.windup, follows: true });
-        break;
-      case 'magnet_surge':
-        this.addStatus(v, { type: 'magnet', dur: p.duration, data: { pullRadius: p.pullRadius, pullForce: p.pullForce } });
-        break;
-      case 'repair_drone':
-        this.cleanse(v);
-        this.shieldCharges.set(v, (this.shieldCharges.get(v) || 0) + p.shieldCharge);
-        v.boost.trigger(0, 'trick');
-        this.entities.push({ kind: 'drone', def, owner: v, life: 1.6, pos: v.pos.clone() });
-        break;
-      case 'ion_lash': {
-        for (const other of karts) {
-          const ov = other.vehicle;
-          if (ov === v || this.isIntangible(ov)) continue;
-          const d = ov.pos.distanceTo(v.pos);
-          if (d > p.arcRadius) continue;
-          const toOther = _v1.copy(ov.pos).sub(v.pos).setY(0).normalize();
-          const fwd = _v2.set(Math.sin(v.yaw), 0, Math.cos(v.yaw));
-          if (toOther.dot(fwd) < Math.cos(p.arcHalfAngle)) continue;
-          // The lash used to punch straight through shields - every other
-          // offensive item respects them, so it does now too.
-          const charges = this.shieldCharges.get(ov) || 0;
-          if (charges > 0) {
-            this.shieldCharges.set(ov, charges - 1);
-            this.onEvent?.('itemBlocked', { itemId: def.id, victim: other, pos: ov.pos });
-            continue;
-          }
-          ov.vel.addScaledVector(toOther, p.knockback);
-          // Steal a slice of their drift charge. The reward is now what was
-          // actually taken: the old code credited a boost for charge the
-          // victim never had, and drained 1.2 regardless of the cap used to
-          // size the reward.
-          const stolen = Math.min(ov.drift.charge, 1.2);
-          ov.drift.charge = Math.max(0, ov.drift.charge - stolen);
-          if (stolen * p.stealBoost > 0.3) v.boost.trigger(0, 'trick');
-          this.onEvent?.('itemHit', { itemId: def.id, victim: other, attacker: kart, pos: ov.pos.clone() });
+
+      // ---- disruption -----------------------------------------------------
+      case 'rust_blight': {
+        const target = this._leaderAhead(kart, karts);
+        if (target) {
+          this._applyHit(def, target, 'blight',
+            { accelMult: p.accelMult, gripMult: p.gripMult }, p.duration, kart);
         }
         break;
       }
-      case 'decoy_beacon':
-        this.entities.push({ kind: 'beacon', def, owner: v, life: p.life, pos: this._ahead(v, p.throwDist), retarget: true });
+      case 'gyro_jinx': {
+        const target = this._targetAhead(kart, karts, 55);
+        if (target && this._hitKart(def, target, kart, HIT_FULL)) {
+          this.addStatus(target.vehicle, {
+            type: 'jinx', dur: p.duration,
+            data: { steerMult: p.steerMult, speedMult: p.speedMult },
+          });
+          target.vehicle._spinT = p.duration;
+        }
         break;
-      case 'tempest_cell':
-        this.addStatus(v, { type: 'tempest', dur: p.duration, data: { charges: p.charges, zapRadius: p.zapRadius } });
+      }
+      case 'hourglass_hex': {
+        const target = this._targetAhead(kart, karts, 70) ?? this._leaderAhead(kart, karts);
+        if (!target) break;
+        if (this.isIntangible(target.vehicle)) break;
+        // the bubble hangs on the VICTIM, so drafting past them is punished too
+        this.entities.push({
+          kind: 'zone', def, owner: v, follow: target.vehicle,
+          pos: target.vehicle.pos.clone(), radius: p.radius,
+          windup: p.windup, duration: p.duration,
+          life: p.windup + p.duration, slowMult: p.slowMult,
+        });
+        this.onEvent?.('itemHex', { itemId: def.id, kart, victim: target, pos: target.vehicle.pos.clone() });
         break;
-      case 'nano_swarm':
-        this.entities.push({ kind: 'swarm', def, owner: v, life: p.duration, pos: v.pos.clone(),
-          coneLen: p.coneLen, coneHalfAngle: p.coneHalfAngle, dragMult: p.dragMult, follows: true });
+      }
+
+      // ---- protection -----------------------------------------------------
+      case 'forge_ward':
+        this.cleanse(v);
+        this.shieldCharges.set(v, (this.shieldCharges.get(v) || 0) + p.shieldCharge);
+        this.onEvent?.('itemWard', { itemId: def.id, kart, pos: v.pos.clone() });
         break;
-      case 'chrono_shard':
-        this.addStatus(v, { type: 'chrono', dur: 4, data: { snapshot: Math.max(10, v.speedAbs), speedMult: p.speedMult } });
-        v.boost.trigger(0, 'trick');
+      case 'echo_bell': {
+        this.entities.push({ kind: 'pulse', def, owner: v, life: 0.6, pos: v.pos.clone(), radius: 0 });
+        // snapshot: _kill mutates the list
+        let broken = 0;
+        for (const e of this.entities.slice()) {
+          if (e.kind === 'pulse' || e.owner === v) continue;
+          const hostile = e.kind === 'hazard' || e.kind === 'wall' || e.kind === 'zone';
+          if (hostile && e.pos.distanceTo(v.pos) < p.radius) { this._kill(e); broken++; }
+        }
+        // pay back a little charge per trap broken
+        if (broken >= 3) v.boost.trigger(1, 'drift');
+        else if (broken > 0) v.boost.trigger(0, 'trick');
+        this.cleanse(v);
+        this.onEvent?.('itemBurst', { itemId: def.id, kart, pos: v.pos.clone(), radius: p.radius });
         break;
+      }
+      case 'mirage_decoy':
+        this.entities.push({
+          kind: 'decoy', def, owner: v, life: p.duration,
+          pos: this._behind(v, 5.5), flashRadius: p.flashRadius, absorbHits: p.absorbHits,
+        });
+        break;
+      case 'storm_cell':
+        this.addStatus(v, {
+          type: 'storm', dur: p.duration,
+          data: { charges: p.charges, zapRadius: p.zapRadius },
+        });
+        break;
+      case 'hex_mirror':
+        this.addStatus(v, { type: 'mirror', dur: p.duration, data: { reflects: p.reflects } });
+        this.onEvent?.('itemWard', { itemId: def.id, kart, pos: v.pos.clone() });
+        break;
+
+      // ---- gamble ---------------------------------------------------------
+      case 'kiln_lottery': {
+        const nextId = rollItemExcept(this.rng, kart._racePos ?? 1, kart._raceTotal ?? 4, def.id);
+        const next = ITEMS[nextId];
+        this.audio?.itemSound(next.sound);
+        this.onEvent?.('itemReroll', { itemId: nextId, kart, pos: v.pos.clone() });
+        this._activate(next, kart, karts);
+        break;
+      }
+      case 'sunforge_heart':
+        this.addStatus(v, {
+          type: 'heart', dur: p.duration,
+          data: { speedMult: p.speedMult, accelMult: p.accelMult, noDrift: true, jitter: 0.06 },
+        });
+        v.boost.trigger(2, 'drift');
+        // the trail is the weapon: a cone of fire behind a kart that is
+        // already accelerating away from you
+        this.entities.push({
+          kind: 'swarm', def, owner: v, life: p.duration, pos: v.pos.clone(), follows: true,
+          coneLen: p.burn.coneLen, coneHalfAngle: p.burn.coneHalfAngle,
+          dragMult: p.burn.dragMult, burn: true,
+        });
+        break;
+
       default: break;
     }
   }
@@ -297,6 +368,11 @@ export class ItemSystem {
   }
   _behind(v, dist) {
     return _v1.set(v.pos.x - Math.sin(v.yaw) * dist, v.y, v.pos.z - Math.cos(v.yaw) * dist).clone();
+  }
+  // behind and `side` metres to the kart's right (used for scatter fans)
+  _behindLateral(v, back, side) {
+    const s = Math.sin(v.yaw), c = Math.cos(v.yaw);
+    return _v1.set(v.pos.x - s * back + c * side, v.y, v.pos.z - c * back - s * side).clone();
   }
 
   _targetAhead(kart, karts, maxDist) {
@@ -315,7 +391,7 @@ export class ItemSystem {
   }
 
   _leaderAhead(kart, karts) {
-    // the highest-progress kart ahead of us (or race leader if we lead)
+    // the highest-progress kart ahead of us
     const v = kart.vehicle;
     const myProg = (kart._raceLap ?? 0) * this.track.L + (v.surf?.progress ?? 0);
     let best = null, bestProg = -Infinity;
@@ -327,54 +403,124 @@ export class ItemSystem {
     return best;
   }
 
-  _spawnProjectile(def, v, target) {
+  // `opts` carries the per-shot variation: pierce, lateral offset, weak hit,
+  // or a shatter effect to leave behind on impact.
+  _spawnProjectile(def, v, target, opts = {}) {
     const pos = v.pos.clone(); pos.y += 0.8;
-    const dir = new THREE.Vector3(Math.sin(v.yaw), 0, Math.cos(v.yaw));
+    const yaw = v.yaw + (opts.offset ?? 0);
+    const dir = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     this.entities.push({
       kind: 'projectile', def, owner: v, target: target?.vehicle ?? null,
-      pos, vel: dir.multiplyScalar(def.params.speed), life: def.params.life,
+      pos, vel: dir.multiplyScalar(opts.speed ?? def.params.speed),
+      life: def.params.life,
+      pierce: opts.pierce ?? 0, hits: null, weak: !!opts.weak, shatter: opts.shatter ?? null,
     });
   }
 
-  _spawnHazard(def, v, pos) {
-    pos.y = (v.surf?.y ?? v.y) + 0.4;
-    this.entities.push({ kind: 'hazard', def, owner: v, pos, life: def.params.life, armT: def.params.armTime ?? 0.8 });
+  _spawnHazard(def, v, pos, fx, armT = null) {
+    pos.y = (this.track.surface(pos, { main: -1, sc: -1 })?.y ?? v.y) + 0.4;
+    this.entities.push({
+      kind: 'hazard', def, owner: v, pos, fx,
+      life: fx.life ?? def.params.life,
+      armT: armT ?? fx.armT ?? def.params.armTime ?? 0.8,
+      flight: fx.flight ?? 0,
+    });
   }
 
-  // Returns true only when the debuff actually landed (false = phased or
+  // Walls take effect immediately. `armT`/`riseT` drive the rise animation;
+  // `graceT` is how long the owner is exempt from their own gate (long enough
+  // to clear it, not long enough to use it as free cover).
+  _spawnWall(def, v, fx) {
+    const p = def.params;
+    const surf = v.surf || { dir: _v1.set(Math.sin(v.yaw), 0, Math.cos(v.yaw)) };
+    const dir = surf.dir ? surf.dir.clone() : _v1.set(Math.sin(v.yaw), 0, Math.cos(v.yaw)).clone();
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
+    const pos = this._behind(v, 3);
+    const wall = {
+      kind: 'wall', def, owner: v, life: p.life, pos,
+      dir, right, width: p.width,
+      armT: p.riseTime ?? 0.5, riseT: p.riseTime ?? 0.5, graceT: p.ownerGrace ?? 2, fx,
+    };
+    if (fx.solid) {
+      // The hitbox IS the visible gate: a capsule along the plate whose
+      // rounded ends sit on the end posts, in the same format race.js uses for
+      // track obstacles. A kart whose body touches a post is stopped; one that
+      // is clear of it drives past; one that hops high enough flies over.
+      const hw = p.width / 2;
+      wall.collider = {
+        kind: 'capsule',
+        x0: pos.x - right.x * hw, z0: pos.z - right.z * hw,
+        x1: pos.x + right.x * hw, z1: pos.z + right.z * hw,
+        r: p.thickness ?? 0.25,
+        y0: pos.y - 0.5, y1: pos.y + (p.height ?? 2.3),
+        hit: 'bulwark',
+      };
+    }
+    this.entities.push(wall);
+  }
+
+  // ------------------------------------------------------------- hitting
+  // Hex Mirror: the first hostile effect that would land on a warded kart is
+  // turned around and delivered to whoever threw it. Returns the kart the
+  // effect should actually be applied to.
+  _resolveVictim(victimKart, attackerKart, def) {
+    if (!victimKart || !attackerKart || attackerKart === victimKart) return victimKart;
+    const list = this.statuses.get(victimKart.vehicle) || [];
+    const mirror = list.find((s) => s.type === 'mirror');
+    if (!mirror || mirror.data.reflects <= 0) return victimKart;
+    mirror.data.reflects--;
+    if (mirror.data.reflects <= 0) this.removeStatus(victimKart.vehicle, 'mirror');
+    this.audio?.itemSound('mirror');
+    this.onEvent?.('itemReflect', { itemId: def?.id, victim: victimKart, attacker: attackerKart, pos: victimKart.vehicle.pos.clone() });
+    return attackerKart;
+  }
+
+  // Returns true only when the debuff actually landed (false = phased,
   // shielded), so callers can make the attacker's reward conditional.
-  _applyHit(def, victim, statusType, data, duration) {
-    const vv = victim.vehicle;
-    if (this.isIntangible(vv)) return false;
-    const charges = this.shieldCharges.get(vv) || 0;
+  _applyHit(def, victim, statusType, data, duration, attacker = null) {
+    const target = this._resolveVictim(victim, attacker, def);
+    const tv = target.vehicle;
+    if (this.isIntangible(tv)) return false;
+    const charges = this.shieldCharges.get(tv) || 0;
     if (charges > 0) {
-      this.shieldCharges.set(vv, charges - 1);
-      this.onEvent?.('itemBlocked', { itemId: def.id, victim, pos: vv.pos });
-      this.audio?.itemSound('phase');
+      this.shieldCharges.set(tv, charges - 1);
+      this.onEvent?.('itemBlocked', { itemId: def.id, victim: target, pos: tv.pos });
+      this.audio?.itemSound('block');
       return false;
     }
-    this.addStatus(vv, { type: statusType, dur: duration, data });
-    this.onEvent?.('itemHit', { itemId: def.id, victim, pos: vv.pos });
+    this.addStatus(tv, { type: statusType, dur: duration, data });
+    this.onEvent?.('itemHit', { itemId: def.id, victim: target, attacker, pos: tv.pos });
     return true;
   }
 
-  _hitKart(def, kart, attacker) {
-    const v = kart.vehicle;
+  // The standard "you got hit": spin, speed loss, and - on a full hit - the
+  // held item goes out of the slot.
+  _hitKart(def, kart, attacker, strength = HIT_FULL) {
+    const target = this._resolveVictim(kart, attacker, def);
+    const v = target.vehicle;
     if (this.isIntangible(v)) return false;
     const charges = this.shieldCharges.get(v) || 0;
     if (charges > 0) {
       this.shieldCharges.set(v, charges - 1);
-      this.onEvent?.('itemBlocked', { itemId: def.id, victim: kart, pos: v.pos });
+      this.onEvent?.('itemBlocked', { itemId: def.id, victim: target, pos: v.pos });
+      this.audio?.itemSound('block');
       return false;
     }
-    // stagger: brief spin + slowdown; held item dropped
-    this.held.set(v, null);
-    v.vel.multiplyScalar(0.45);
-    this.addStatus(v, { type: 'stagger', dur: 0.85, data: { speedMult: 0.5, steerMult: 0.25 } });
-    v.pendingFx.spin = true;
-    v._spinT = 0.85;                      // visual spin consumed by kartMesh
-    this.audio?.collision(1.1);
-    this.onEvent?.('itemHit', { itemId: def.id, victim: kart, attacker, pos: v.pos.clone() });
+    const full = strength >= HIT_FULL;
+    if (full) this.held.set(v, null);
+    v.vel.multiplyScalar(full ? 0.45 : 0.78);
+    this.addStatus(v, {
+      type: 'stagger', dur: full ? 0.85 : 0.4,
+      data: { speedMult: full ? 0.5 : 0.82, steerMult: full ? 0.25 : 0.7 },
+    });
+    if (full) {
+      v.pendingFx.spin = true;
+      v._spinT = 0.85;                    // visual spin consumed by kartMesh
+    }
+    this.audio?.collision(full ? 1.1 : 0.6);
+    this.onEvent?.('itemHit', {
+      itemId: def.id, victim: target, attacker, pos: v.pos.clone(), weak: !full,
+    });
     return true;
   }
 
@@ -386,9 +532,8 @@ export class ItemSystem {
   }
 
   // Identity-based removal. Index-based splices were unsafe: a handler that
-  // despawned its OWN entity mid-iteration shifted the array, and the
-  // caller's follow-up splice at the same index then deleted an unrelated
-  // entity (a live mine or wall silently vanishing mid-race).
+  // despawned its OWN entity mid-iteration shifted the array, and the caller's
+  // follow-up splice at the same index then deleted an unrelated entity.
   _kill(entity) {
     if (!entity || entity.dead) return;
     entity.dead = true;
@@ -396,85 +541,81 @@ export class ItemSystem {
     if (at >= 0) this.entities.splice(at, 1);
   }
 
+  _ownerKart(karts, vehicle) {
+    return karts.find((k) => k.vehicle === vehicle) || null;
+  }
+
   // ------------------------------------------------------------- update
   update(dt, karts, raceTime) {
     if (!this.enabled) return;
 
-    // --- statuses ticking ---------------------------------------------------
+    this._updateStatuses(dt, karts);
+    this._updateBoxes(dt, karts);
+
+    // --- entities -----------------------------------------------------------
+    // Snapshot the list: handlers may add or remove entities while running,
+    // and every removal is by identity so indices can never go stale.
+    for (const e of this.entities.slice()) {
+      if (e.dead) continue;
+      e.life -= dt;
+      if (e.armT !== undefined) e.armT -= dt;
+      if (e.graceT !== undefined) e.graceT -= dt;
+
+      switch (e.kind) {
+        case 'projectile': this._updateProjectile(e, dt, karts); break;
+        case 'hazard': this._updateHazard(e, dt, karts); break;
+        case 'wall': this._updateWall(e, dt, karts); break;
+        case 'zone': this._updateZone(e, dt, karts); break;
+        case 'swarm': this._updateSwarm(e, dt, karts); break;
+        case 'pulse': e.radius = (1 - e.life / 0.6) * e.def.params.radius; break;
+        case 'decoy': break;
+        default: break;
+      }
+
+      if (!e.dead && e.life <= 0) this._kill(e);
+    }
+
+    this.applyMods(karts);
+  }
+
+  _updateStatuses(dt, karts) {
     for (const [vehicle, list] of this.statuses) {
       for (let i = list.length - 1; i >= 0; i--) {
         const s = list[i];
         s.t += dt;
-        if (s.type === 'tempest') {
-          // zap on drift-boost release
-          if (vehicle.fx?.driftEnd?.boosted && s.data.charges > 0) {
-            s.data.charges--;
-            this._zapBehind(vehicle, s.data.zapRadius, karts);
-            if (s.data.charges <= 0) { list.splice(i, 1); continue; }
+        const d = s.data || {};
+
+        if (s.type === 'storm' && vehicle.fx?.driftEnd?.boosted && d.charges > 0) {
+          // a charged cell arcs backwards every time the owner releases a drift
+          d.charges--;
+          this._zapBehind(vehicle, d.zapRadius, karts, ITEMS.storm_cell);
+          if (d.charges <= 0) { list.splice(i, 1); continue; }
+        }
+
+        if (s.type === 'glasswalk' && d.trail) {
+          // shedding glass while phased: the cost of being untouchable
+          d.trailT = (d.trailT || 0) + dt;
+          if (d.trailT >= d.trail.every) {
+            d.trailT = 0;
+            const at = _v1.set(
+              vehicle.pos.x - Math.sin(vehicle.yaw) * 1.6,
+              vehicle.y,
+              vehicle.pos.z - Math.cos(vehicle.yaw) * 1.6,
+            ).clone();
+            this._spawnHazard(ITEMS.glass_fang, vehicle, at, {
+              kind: 'shards', radius: d.trail.radius, life: d.trail.life,
+              slowMult: d.trail.slowMult, slowDur: d.trail.slipDur, armT: 0.15,
+            }, 0.15);
           }
         }
-        if (s.type === 'siphonOwner') {
-          // "Break line of sight or boost away": the drain only holds while
-          // the victim stays in range, so escaping really does end it.
-          const src = s.data.sourceVehicle;
-          const gone = !src
-            || src.pos.distanceTo(vehicle.pos) > (s.data.maxRange ?? 45)
-            || this.isIntangible(src);
-          if (gone) {
-            if (src) this.removeStatus(src, 'siphonVictim');
-            list.splice(i, 1);
-            continue;
-          }
-        }
-        if (s.type === 'chrono') {
-          // restore snapshot speed if slowed hard
-          if (vehicle.speedAbs < s.data.snapshot * 0.55 && vehicle.grounded) {
-            const fwd = _v1.set(Math.sin(vehicle.yaw), 0, Math.cos(vehicle.yaw));
-            vehicle.vel.copy(fwd).multiplyScalar(s.data.snapshot);
-            this.onEvent?.('chronoRestore', { vehicle, pos: vehicle.pos });
-            list.splice(i, 1); continue;
-          }
-        }
+
         if (s.t >= s.dur) list.splice(i, 1);
       }
       if (list.length === 0) this.statuses.delete(vehicle);
     }
+  }
 
-    // --- slipstream harpoon tether --------------------------------------------
-    // The harpoon status was recorded but nothing ever acted on it, so the
-    // item fired, stuck, and then did precisely nothing. The tether reels the
-    // OWNER toward the speared kart (it is a traversal tool, not a weapon):
-    // an accelerating pull along the line, capped so it can close a gap but
-    // never slingshot the owner past its target.
-    for (const kart of karts) {
-      const tether = (this.statuses.get(kart.vehicle) || []).find((s) => s.type === 'harpoon');
-      if (!tether) continue;
-      const target = tether.data.targetVehicle;
-      const v = kart.vehicle;
-      if (!target || target === v) { this.removeStatus(v, 'harpoon'); continue; }
-      _v1.copy(target.pos).sub(v.pos).setY(0);
-      const d = _v1.length();
-      // released once the owner is in the target's slipstream, if the target
-      // phases out / outruns the line, or - as the item's counter text
-      // promises - if the speared kart boosts free
-      if (d < HARPOON_MIN_RANGE || d > HARPOON_MAX_RANGE
-          || this.isIntangible(target) || target.boost?.boosting) {
-        this.removeStatus(v, 'harpoon');
-        this.onEvent?.('harpoonRelease', { kart, pos: v.pos.clone() });
-        continue;
-      }
-      _v1.divideScalar(d);
-      // fade the pull in over the first moments so it does not jerk
-      const ramp = Math.min(1, tether.t / 0.25);
-      v.vel.addScaledVector(_v1, tether.data.pullForce * ramp * dt);
-      // the speared kart is dragged back a little: this is the counterplay
-      if (!this.isIntangible(target)) {
-        target.vel.addScaledVector(_v1, -tether.data.pullForce * HARPOON_REACTION * dt);
-      }
-      this.onEvent?.('harpoonPull', { kart, from: v.pos, to: target.pos });
-    }
-
-    // --- item boxes -----------------------------------------------------------
+  _updateBoxes(dt, karts) {
     for (const box of this.boxes) {
       if (box.respawnT > 0) { box.respawnT -= dt; continue; }
       for (const kart of karts) {
@@ -488,86 +629,28 @@ export class ItemSystem {
           break;
         }
       }
+      // a box always sits at its authored anchor
+      if (box.home && box.pos.distanceToSquared(box.home) > 1e-6) box.pos.copy(box.home);
     }
-
-    // --- magnet surge pulls boxes toward the kart ------------------------------
-    // Boxes are track furniture, not free-floating props: a magnet may drag
-    // one toward the kart, but once the surge ends it must drift back to its
-    // authored spot. Without the spring below a few magnets permanently
-    // relocated the item boxes, eventually emptying whole sections of the
-    // circuit and leaving others clumped.
-    let anyMagnet = false;
-    for (const kart of karts) {
-      const mag = (this.statuses.get(kart.vehicle) || []).find((s) => s.type === 'magnet');
-      if (!mag) continue;
-      anyMagnet = true;
-      for (const box of this.boxes) {
-        if (box.respawnT > 0) continue;
-        const d = box.pos.distanceTo(kart.vehicle.pos);
-        if (d < mag.data.pullRadius && d > 1.5) {
-          _v1.copy(kart.vehicle.pos).sub(box.pos).normalize().multiplyScalar(mag.data.pullForce * dt);
-          box.pos.add(_v1);
-        }
-      }
-    }
-    // spring every displaced box back toward its anchor
-    for (const box of this.boxes) {
-      if (!box.home) continue;
-      const off = _v1.copy(box.home).sub(box.pos);
-      const dist = off.length();
-      if (dist < 0.01) { box.pos.copy(box.home); continue; }
-      // snap home instantly while respawning (nobody can see it)
-      if (box.respawnT > 0) { box.pos.copy(box.home); continue; }
-      const rate = anyMagnet ? MAGNET_RETURN_SLOW : MAGNET_RETURN;
-      box.pos.addScaledVector(off.divideScalar(dist), Math.min(dist, rate * dt));
-    }
-
-    // --- entities ----------------------------------------------------------------
-    // Snapshot the list: handlers may add or remove entities while running,
-    // and every removal is by identity so indices can never go stale.
-    for (const e of this.entities.slice()) {
-      if (e.dead) continue;
-      e.life -= dt;
-      if (e.armT !== undefined) e.armT -= dt;
-
-      switch (e.kind) {
-        case 'projectile': this._updateProjectile(e, dt, karts); break;
-        case 'hazard': this._updateHazard(e, dt, karts); break;
-        case 'wall': this._updateWall(e, dt, karts); break;
-        case 'zone': this._updateZone(e, dt, karts); break;
-        case 'swarm': this._updateSwarm(e, dt, karts); break;
-        case 'pulse': e.radius = (1 - e.life / 0.6) * e.def.params.radius; break;
-        case 'decoy': case 'beacon': case 'drone': break;
-        default: break;
-      }
-
-      if (!e.dead && e.life <= 0) this._kill(e);
-    }
-
-    this.applyMods(karts);
   }
 
   _updateProjectile(e, dt, karts) {
     const p = e.def.params;
-    // decoy beacons steal targeting
+    // a mirage decoy steals targeting from anything in range
     let target = e.target;                 // a VehicleController (or null)
     let beaconed = false;
     for (const o of this.entities) {
-      if (o.kind === 'beacon' && o.retarget && o.pos.distanceTo(e.pos) < 40) {
+      if (o.kind === 'decoy' && o.owner !== e.owner && o.pos.distanceTo(e.pos) < 40) {
         target = { pos: o.pos }; beaconed = true; break;
       }
     }
     if (target) {
       let keep = true;
-      if (!beaconed) {
-        // flux bolt lock breaks if the target drifts; harpoon breaks on boost
-        if (p.lockBreakDrift && target.drift?.drifting) keep = false;
-        else if (p.breakOnTargetBoost && target.boost?.boosting) keep = false;
-      }
+      if (!beaconed && p.lockBreakDrift && target.drift?.drifting) keep = false;
       if (keep) {
         _v1.copy(target.pos).sub(e.pos).setY(0).normalize();
         const cur = _v2.copy(e.vel).normalize();
-        cur.lerp(_v1, Math.min(1, p.homing * dt * 14)).normalize();
+        cur.lerp(_v1, Math.min(1, (p.homing ?? 0) * dt * 14)).normalize();
         e.vel.copy(cur).multiplyScalar(p.speed);
       } else {
         e.target = null;
@@ -581,13 +664,10 @@ export class ItemSystem {
     if (e.target && e.target.pos) {
       const dT = e.pos.distanceTo(e.target.pos);
       e._closest = Math.min(e._closest ?? Infinity, dT);
-      if (e._closest < 12 && dT > e._closest + 14) {
-        this._kill(e);
-        return;
-      }
+      if (e._closest < 12 && dT > e._closest + 14) { this._kill(e); return; }
     }
 
-    // mirage clones absorb hits
+    // mirage decoys absorb hits
     for (let j = this.entities.length - 1; j >= 0; j--) {
       const c = this.entities[j];
       if (c.kind !== 'decoy' || c.owner === e.owner) continue;
@@ -597,96 +677,163 @@ export class ItemSystem {
         this.onEvent?.('cloneFlash', { pos: c.pos, radius: c.flashRadius });
         for (const kart of karts) {
           if (kart.vehicle !== c.owner && kart.vehicle.pos.distanceTo(c.pos) < c.flashRadius) {
-            this.addStatus(kart.vehicle, { type: 'stagger', dur: 0.5, data: { speedMult: 0.6, steerMult: 0.4 } });
+            this._hitKart(c.def, kart, this._ownerKart(karts, c.owner), HIT_WEAK);
           }
         }
         return;
       }
     }
 
+    const attacker = this._ownerKart(karts, e.owner);
     for (const kart of karts) {
       const v = kart.vehicle;
       if (v === e.owner) continue;
-      if (v.pos.distanceTo(e.pos) < 2.4) {
-        let applied = false;
-        if (e.def.id === 'echo_snare') {
-          applied = this._hitKart(e.def, kart, this._ownerKart(karts, e.owner));
-          if (applied) this.addStatus(v, { type: 'snare', dur: e.def.params.reverseSteerDur, data: {} });
-        } else if (e.def.id === 'slipstream_harpoon') {
-          // tether: pull the OWNER toward the target instead of punishing it
-          this.addStatus(e.owner, { type: 'harpoon', dur: e.def.params.pullDuration,
-            data: { targetVehicle: v, pullForce: e.def.params.pullForce } });
-          applied = true;
-        } else {
-          applied = this._hitKart(e.def, kart, this._ownerKart(karts, e.owner));
-        }
-        if (applied || e.def.id === 'slipstream_harpoon') {
-          this._kill(e);
+      if (v.pos.distanceTo(e.pos) > 2.4) continue;
+      if (e.hits && e.hits.has(v)) continue;         // already pierced this one
+
+      if (e.shatter) {
+        // the fang breaks up where it lands and leaves the road dirty - but a
+        // hit that was denied (shield, phase) earns the thrower no glass
+        const landed = this._hitKart(e.def, kart, attacker, HIT_FULL);
+        if (!landed) {
+          if (this.isIntangible(v)) continue;          // flew through a ghost
+          this._kill(e);                               // absorbed by a ward
           return;
         }
+        this._spawnHazard(e.def, e.owner, e.pos.clone(), {
+          kind: 'shards', radius: e.shatter.radius, life: e.shatter.life,
+          slowMult: e.shatter.slowMult, slowDur: e.shatter.slipDur, armT: 0.1,
+        }, 0.1);
+        this.onEvent?.('itemShatter', { itemId: e.def.id, pos: e.pos.clone(), radius: e.shatter.radius });
+        this._kill(e);
+        return;
       }
+
+      const applied = this._hitKart(e.def, kart, attacker, e.weak ? HIT_WEAK : HIT_FULL);
+      if (!applied && this.isIntangible(v)) continue;   // phased: fly straight through
+      if (e.pierce > 0) {
+        e.pierce--;
+        (e.hits || (e.hits = new Set())).add(v);
+        continue;                                        // keep going
+      }
+      this._kill(e);
+      return;
     }
   }
 
   _updateHazard(e, dt, karts) {
-    const p = e.def.params;
-    if (e.armT > 0) return;
+    const fx = e.fx;
+    if (e.armT > 0) return;                       // still arming / still in the air
+    if (e._burnCd) for (const [v, t] of e._burnCd) e._burnCd.set(v, t - dt);
+    const attacker = this._ownerKart(karts, e.owner);
     for (const kart of karts) {
       const v = kart.vehicle;
       if (v === e.owner || this.isIntangible(v)) continue;
       const d = v.pos.distanceTo(e.pos);
-      if (e.def.id === 'vortex_mine') {
-        if (d < p.radius) {
-          _v1.copy(e.pos).sub(v.pos).setY(0).normalize().multiplyScalar(p.pull * dt * 6);
+      if (d > fx.radius) continue;
+
+      switch (fx.kind) {
+        case 'erupt':
+          // drag them in, then blow
+          _v1.copy(e.pos).sub(v.pos).setY(0).normalize().multiplyScalar(fx.pull * dt * 6);
           v.vel.add(_v1);
-        }
-        if (d < 2.2) {
-          v.vy = Math.max(v.vy, p.launch);
-          v.grounded = false;
-          this._hitKart(e.def, kart, this._ownerKart(karts, e.owner));
+          if (d < fx.triggerRadius) {
+            v.vy = Math.max(v.vy, fx.launch);
+            v.grounded = false;
+            this._hitKart(e.def, kart, attacker, HIT_FULL);
+            this._kill(e);
+            return;
+          }
+          break;
+        case 'thorns':
+          this._hitKart(e.def, kart, attacker, HIT_FULL);
+          this.addStatus(v, {
+            type: 'thornSpin', dur: fx.spinDur,
+            data: { steerMult: 0.12, speedMult: 0.68 },
+          });
+          v._spinT = Math.max(v._spinT || 0, fx.spinDur);
           this._kill(e);
           return;
+        case 'shards':
+          this.addStatus(v, {
+            type: 'slip', dur: fx.slowDur ?? 0.4,
+            data: { speedMult: fx.slowMult, gripMult: fx.gripMult ?? 1 },
+          });
+          break;
+        case 'crater': {
+          // a burning patch: a weak hit the first time you cross it, then a
+          // drag while you stay in. Per-kart cooldown, so it cannot chain-stun.
+          e._burnCd = e._burnCd || new Map();
+          if ((e._burnCd.get(v) || 0) <= 0) {
+            this._hitKart(e.def, kart, attacker, HIT_WEAK);
+            e._burnCd.set(v, 1.1);
+          }
+          this.addStatus(v, {
+            type: 'burnt', dur: fx.burnDur ?? 0.8,
+            data: { speedMult: 0.62, jitter: 0.22 },
+          });
+          break;
         }
-      } else if (e.def.id === 'static_bloom') {
-        if (d < p.radius) {
-          this.addStatus(v, { type: 'bloom', dur: 0.5, data: { noDrift: true, jitter: p.jitter } });
-        }
-      } else if (e.def.id === 'graviton_well') {
-        if (d < p.radius && d > 0.8) {
-          _v1.copy(e.pos).sub(v.pos).setY(0).normalize().multiplyScalar(p.pull * dt);
-          v.vel.add(_v1);
-        }
+        default: break;
       }
     }
   }
 
   _updateWall(e, dt, karts) {
-    const p = e.def.params;
+    const fx = e.fx || {};
+    const owner = e.owner;
     for (const kart of karts) {
       const v = kart.vehicle;
-      if (v === e.owner && e.armT > -1.5) continue;
+      // the owner gets a moment of grace leaving their own gate, then it is
+      // solid for them too - a Bulwark costs a lane, it is not free cover
+      if (v === owner && e.graceT > 0) continue;
+      if (this.isIntangible(v)) continue;
+
+      if (fx.solid) {
+        // physical gate: the kart's body against the gate's visible volume,
+        // resolved exactly like a track obstacle - push out along the contact
+        // normal (straight back off the plate, sideways off an end post)
+        const hit = e.collider && resolveObstacleContact(e.collider, v.pos.x, v.pos.z,
+          v.y + KART_HIT_BOTTOM, v.y + KART_HIT_TOP, CONFIG.vehicle.collisionRadius);
+        if (!hit) continue;
+        v.pos.x += hit.nx * hit.pen;
+        v.pos.z += hit.nz * hit.pen;
+        const relN = -(v.vel.x * hit.nx + v.vel.z * hit.nz);
+        if (relN > 0) {
+          // moving into it: kill that momentum and bounce a little back
+          const k = 1.25 / (v.massFactor ?? 1);
+          v.vel.x += hit.nx * relN * k;
+          v.vel.z += hit.nz * relN * k;
+        }
+        this.addStatus(v, { type: 'slow', dur: 0.35, data: { speedMult: fx.slowMult ?? 0.5 } });
+        this.audio?.collision(0.8);
+        continue;
+      }
       _v1.copy(v.pos).sub(e.pos);
       const along = _v1.dot(e.dir), lat = _v1.dot(e.right);
-      if (Math.abs(along) < 1.4 && Math.abs(lat) < p.width / 2) {
-        if (e.def.id === 'aurora_veil') {
-          this.addStatus(v, { type: 'slip', dur: p.slipDur, data: { gripMult: p.gripMult } });
-        } else {
-          // prism wall: heavy slow while crossing
-          this.addStatus(v, { type: 'prism', dur: 0.4, data: { speedMult: p.slowMult } });
-        }
+      if (Math.abs(lat) > e.width / 2) continue;
+      if (Math.abs(along) < 1.4) {
+        this.addStatus(v, {
+          type: 'slip', dur: fx.slipDur ?? 1.0,
+          data: { gripMult: fx.gripMult ?? 1, jitter: fx.jitter ?? 0 },
+        });
       }
     }
   }
 
   _updateZone(e, dt, karts) {
-    const p = e.def.params;
-    if (e.follows && e.owner) e.pos.copy(e.owner.pos);
-    if (e.life > e.def.params.duration) return; // windup phase
+    // a zone either rides with its owner or hangs on its victim
+    if (e.follow) e.pos.copy(e.follow.pos);
+    else if (e.follows && e.owner) e.pos.copy(e.owner.pos);
+    if (e.life > e.duration) return;              // windup phase
     for (const kart of karts) {
       const v = kart.vehicle;
       if (v === e.owner || this.isIntangible(v)) continue;
       if (v.pos.distanceTo(e.pos) < e.radius) {
-        this.addStatus(v, { type: 'ripple', dur: 0.25, data: { speedMult: p.slowMult, steerMult: 0.9 } });
+        this.addStatus(v, {
+          type: 'hexSlow', dur: 0.25,
+          data: { speedMult: e.slowMult, steerMult: 0.92 },
+        });
       }
     }
   }
@@ -694,6 +841,7 @@ export class ItemSystem {
   _updateSwarm(e, dt, karts) {
     if (e.follows && e.owner) e.pos.copy(e.owner.pos);
     const ownerYaw = e.owner ? e.owner.yaw : 0;
+    const attacker = this._ownerKart(karts, e.owner);
     for (const kart of karts) {
       const v = kart.vehicle;
       if (v === e.owner || this.isIntangible(v)) continue;
@@ -703,12 +851,22 @@ export class ItemSystem {
       _v1.normalize();
       const back = _v2.set(-Math.sin(ownerYaw), 0, -Math.cos(ownerYaw));
       if (_v1.dot(back) < Math.cos(e.coneHalfAngle)) continue;
-      this.addStatus(v, { type: 'swarmDrag', dur: 0.3, data: { speedMult: e.dragMult } });
+      if (e.burn) {
+        // molten wake: a real hit, but rate-limited so one pass is one burn
+        if ((e._lastBurn ?? 0) <= 0) {
+          this._hitKart(e.def, kart, attacker, HIT_WEAK);
+          e._lastBurn = 0.5;
+        }
+      } else {
+        this.addStatus(v, { type: 'slow', dur: 0.3, data: { speedMult: e.dragMult } });
+      }
     }
+    if (e._lastBurn > 0) e._lastBurn -= dt;
   }
 
-  _zapBehind(vehicle, radius, karts) {
+  _zapBehind(vehicle, radius, karts, def) {
     const back = _v1.set(-Math.sin(vehicle.yaw), 0, -Math.cos(vehicle.yaw));
+    const attacker = this._ownerKart(karts, vehicle);
     for (const kart of karts) {
       const v = kart.vehicle;
       if (v === vehicle || this.isIntangible(v)) continue;
@@ -716,13 +874,9 @@ export class ItemSystem {
       if (d > radius) continue;
       _v2.copy(v.pos).sub(vehicle.pos).normalize();
       if (_v2.dot(back) < 0.1) continue;
-      this._hitKart(ITEMS.tempest_cell, kart, null);
+      this._hitKart(def, kart, attacker, HIT_FULL);
     }
     this.onEvent?.('tempestZap', { pos: vehicle.pos, radius });
-  }
-
-  _ownerKart(karts, vehicle) {
-    return karts.find((k) => k.vehicle === vehicle) || null;
   }
 
   // Convenience for race-mode restarts.
@@ -741,3 +895,20 @@ export class ItemSystem {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shared hazard effects. A hazard entity carries one of these as `fx`, so the
+// simulation never has to know which catalog entry spawned it.
+// ---------------------------------------------------------------------------
+const ERUPT = (p) => ({
+  kind: 'erupt', radius: p.radius, pull: p.pull, launch: p.launch,
+  triggerRadius: 2.2, life: p.life,
+});
+const THORNS = (p) => ({
+  kind: 'thorns', radius: p.radius, spinDur: p.spinDur, life: p.life,
+});
+const CRATER = {
+  kind: 'crater', radius: 5.0, burnDur: 0.8, life: 6.5,
+};
+
+export { HARMFUL };

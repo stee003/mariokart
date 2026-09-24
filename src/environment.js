@@ -22,6 +22,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
+import { OBSTACLE_PROFILE } from './track.js';
 
 const SANDSTONES = [0xc9834e, 0xb97a45, 0xd99a5b, 0xa86f3e, 0xd18c50];
 const DUNES = [0xe0b070, 0xd8a868, 0xdcab78, 0xe6bc84, 0xcfa060];
@@ -689,21 +690,24 @@ export function buildEnvironment(scene, track) {
   const gearG = new THREE.Group();
   const gearMatDark = new THREE.MeshStandardMaterial({ color: 0x7c5a2e, roughness: 0.55, metalness: 0.4 });
   const gearGlowMat = new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.9 });
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 1.1, 14), gearMatDark);
+  // Dimensions come from the shared collision profile, so this gear's visible
+  // hub / arm / tips are exactly what getObstacleColliders() reports.
+  const GP = track.gear.profile || OBSTACLE_PROFILE.gear;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(GP.hubRadius, GP.hubRadius, GP.hubHeight, 14), gearMatDark);
   gearG.add(hub);
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(track.gear.armRadius * 2, 0.55, 1.1), gearMatDark);
-  arm.position.y = 0.45;
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(track.gear.armRadius * 2, GP.armHeight, GP.armDepth), gearMatDark);
+  arm.position.y = GP.armLift;
   gearG.add(arm);
   for (const side of [1, -1]) {
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8), gearMatDark);
-    tip.position.set(side * track.gear.armRadius, 0.45, 0);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(GP.tipRadius, 10, 8), gearMatDark);
+    tip.position.set(side * track.gear.armRadius, GP.armLift, 0);
     gearG.add(tip);
-    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 6), gearGlowMat);
-    glow.position.set(side * track.gear.armRadius, 1.15, 0);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(GP.tipRadius * 0.42, 8, 6), gearGlowMat);
+    glow.position.set(side * track.gear.armRadius, GP.armLift + GP.tipRadius * 0.58, 0);
     gearG.add(glow);
   }
   gearG.position.copy(track.gear.center);
-  gearG.position.y += 0.5;
+  gearG.position.y += GP.lift;
   group.add(gearG);
   state.gearMesh = gearG;
 
@@ -711,10 +715,12 @@ export function buildEnvironment(scene, track) {
   const sliderG = new THREE.Group();
   const sliderMat = new THREE.MeshStandardMaterial({ color: 0x8f6238, roughness: 0.9, flatShading: true });
   const bandMat = new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.85 });
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.6, 2.4), sliderMat);
+  const SP = track.slider.profile || OBSTACLE_PROFILE.slider;
+  const slabW = track.slider.radius * SP.boxScale;
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(slabW, SP.height, slabW), sliderMat);
   sliderG.add(slab);
   for (const yy of [-0.6, 0.6]) {
-    const band = new THREE.Mesh(new THREE.BoxGeometry(2.55, 0.28, 2.55), bandMat);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(slabW * 1.02, 0.28, slabW * 1.02), bandMat);
     band.position.y = yy;
     sliderG.add(band);
   }

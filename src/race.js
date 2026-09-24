@@ -7,6 +7,7 @@
 import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
 import { normalizeAngle } from './vehicle.js';
+import { resolveObstacleContact, KART_HIT_BOTTOM, KART_HIT_TOP } from './track.js';
 
 const R = CONFIG.race;
 
@@ -30,10 +31,14 @@ export class RaceManager {
     this.playerInput = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
     this.lastCountInt = -1;
     this.finishTimer = 0;
+    this.finishPos = null;      // where the player crossed the line
     this.wrongWayTimer = 0;
     this.paused = false;
     this.lapsOverride = null;   // modes (GP escalation, time trial) set this
   }
+
+  // 0..1 through the post-finish cinematic (see CONFIG.race.resultsDelay).
+  get finishProgress() { return Math.min(1, this.finishTimer / R.resultsDelay); }
 
   registerKart(kart) {
     this.karts.push(kart);
@@ -57,6 +62,7 @@ export class RaceManager {
     this.playerArmed = false;
     this.lastCountInt = -1;
     this.finishTimer = 0;
+    this.finishPos = null;
     this.wrongWayTimer = 0;
     this.karts.forEach((kart, i) => {
       kart.vehicle.place(grid[i]);
@@ -119,6 +125,8 @@ export class RaceManager {
 
     if (this.state === 'finished') {
       this.finishTimer += rawDt;
+      // Slow motion is a curve, not a switch: fall in, hold, ease back out.
+      this.timeScale = finishTimeScale(this.finishTimer);
       if (this.finishTimer > R.resultsDelay) this._showResults();
     }
   }
@@ -211,12 +219,16 @@ export class RaceManager {
     if (kart.isPlayer) {
       this.state = 'finished';
       this.finishTimer = 0;
-      this.timeScale = R.slowMoOnFinish;
-      this.hud.notify(this.i18n.t('race.finished'));
+      this.timeScale = 1;                       // finishTimeScale takes over
       const pos = this.positions().findIndex((k) => k === kart) + 1;
-      this.audio.finish(pos === 1);
+      this.finishPos = pos;
+      // The finish banner (HUDManager.finishFx, started by the playerFinished
+      // listener) says this better than a toast; keep the toast only for HUDs
+      // that do not implement the cinematic.
+      if (typeof this.hud.finishFx !== 'function') this.hud.notify(this.i18n.t('race.finished'));
+      this.audio.finishLine(pos);
       this.onEvent && this.onEvent('celebrate', {
-        pos: kart.vehicle.pos.clone(), win: pos === 1,
+        pos: kart.vehicle.pos.clone(), win: pos === 1, place: pos,
       });
       this.onEvent && this.onEvent('playerFinished', { pos });
     }
@@ -269,17 +281,19 @@ export class RaceManager {
 
   _collideObstacles() {
     const colliders = this.track.getObstacleColliders();
+    if (!colliders.length) return;
     for (const kart of this.karts) {
       const v = kart.vehicle;
+      // The kart is a vertical cylinder spanning its visible chassis + pilot,
+      // so hopping over a low obstacle now genuinely clears it.
+      const y0 = v.y + KART_HIT_BOTTOM, y1 = v.y + KART_HIT_TOP;
       for (const c of colliders) {
-        const dx = v.pos.x - c.x, dz = v.pos.z - c.z;
-        const minD = c.r + CONFIG.vehicle.collisionRadius;
-        const dSq = dx * dx + dz * dz;
-        if (dSq >= minD * minD || dSq < 1e-6) continue;
-        const d = Math.sqrt(dSq);
-        const nx = dx / d, nz = dz / d;
-        v.pos.x = c.x + nx * minD;
-        v.pos.z = c.z + nz * minD;
+        const hit = resolveObstacleContact(c, v.pos.x, v.pos.z, y0, y1,
+          CONFIG.vehicle.collisionRadius);
+        if (!hit) continue;
+        const { nx, nz, pen } = hit;
+        v.pos.x += nx * pen;
+        v.pos.z += nz * pen;
         const relN = v.vel.x * -nx + v.vel.z * -nz;
         if (relN > 0) {
           // moving into the obstacle: bounce (heavier karts shrug it off more)
@@ -292,6 +306,7 @@ export class RaceManager {
         this.onEvent && this.onEvent('obstacleHit', {
           pos: _mid.set(v.pos.x, v.y + 0.7, v.pos.z),
           strength: 1.4,
+          kind: c.hit,
         });
       }
     }
@@ -385,6 +400,23 @@ export class RaceManager {
       bestLap: pst.bestLap,
     });
   }
+}
+
+// Slow-motion curve for the finish cinematic (real seconds in, time scale
+// out): ease-out down to the deep point, hold it while the camera sweeps,
+// then smoothstep back up so the results card does not arrive out of nowhere.
+export function finishTimeScale(t) {
+  const deep = R.slowMoOnFinish;
+  if (t < R.slowMoRampIn) {
+    const k = Math.max(0, t / R.slowMoRampIn);
+    return 1 + (deep - 1) * (1 - (1 - k) * (1 - k));
+  }
+  const outStart = R.resultsDelay - R.slowMoRampOut;
+  if (t > outStart) {
+    const k = Math.min(1, (t - outStart) / R.slowMoRampOut);
+    return deep + (R.slowMoFloor - deep) * (k * k * (3 - 2 * k));
+  }
+  return deep;
 }
 
 const _mid = new THREE.Vector3();

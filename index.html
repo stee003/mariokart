@@ -28,6 +28,23 @@
         <div id="wrongway" class="hidden" role="alert"></div>
       </div>
 
+      <!-- Finish-line cinematic overlay. Everything here is decorative and
+           driven by HUDManager.finishFx(): a light flash, a checkered flag
+           wipe, sunburst rays and the placing banner. The 3D camera sweeps
+           underneath it (see CameraController.updateCinematic). -->
+      <div id="finish-fx" class="hidden" aria-hidden="true">
+        <div class="fx-vignette"></div>
+        <div class="fx-rays"></div>
+        <div class="fx-flash"></div>
+        <div class="fx-flag fx-flag-top"></div>
+        <div class="fx-flag fx-flag-bot"></div>
+        <div class="fx-banner">
+          <div class="fx-kicker" id="finish-kicker">FINISH</div>
+          <div class="fx-place" id="finish-place">1ST</div>
+          <div class="fx-sub" id="finish-sub"></div>
+        </div>
+      </div>
+
       <div id="minimap-box" class="hidden">
         <canvas id="minimap" width="220" height="220" role="img"
                 aria-label="Track minimap"></canvas>
@@ -73,7 +90,7 @@
         <div class="menu-section-label" data-i18n="menu.command">Race command</div>
 
         <div class="menu-buttons main-actions">
-          <button class="btn btn-primary main-action" id="btn-start">
+          <button class="btn btn-primary main-action" id="btn-start" data-nav-default>
             <span class="action-index" aria-hidden="true">01</span>
             <span class="action-copy">
               <span class="action-title" data-i18n="menu.start">Start Race</span>
@@ -144,6 +161,10 @@
           <input type="range" id="volume" min="0" max="1" step="0.05" aria-label="Volume" />
         </div>
         <div class="setting-row">
+          <label data-i18n="settings.engineVolume">Engine volume</label>
+          <input type="range" id="engine-volume" min="0" max="1" step="0.05" aria-label="Engine volume" />
+        </div>
+        <div class="setting-row">
           <label data-i18n="settings.music">Music volume</label>
           <input type="range" id="music-volume" min="0" max="1" step="0.05" aria-label="Music volume" />
         </div>
@@ -199,7 +220,7 @@
             <button class="btn btn-small" id="btn-keys-reset" data-i18n="settings.resetKeys">Reset bindings</button>
           </div>
         </div>
-        <button class="btn" id="btn-settings-back" data-i18n="settings.back">Back</button>
+        <button class="btn" id="btn-settings-back" data-i18n="settings.back" data-nav-back>Back</button>
       </div>
     </div>
 
@@ -228,7 +249,7 @@
           <div id="garage-stats" class="garage-stats"></div>
         </div>
         <div class="garage-hint" data-i18n="garage.hint"></div>
-        <button class="btn" id="btn-garage-back" data-i18n="menu.back">Back</button>
+        <button class="btn" id="btn-garage-back" data-i18n="menu.back" data-nav-back>Back</button>
       </div>
     </div>
 
@@ -237,11 +258,11 @@
       <div class="menu-card">
         <h2 data-i18n="menu.mode">Choose Game Mode</h2>
         <div class="menu-buttons mode-buttons">
-          <button class="btn btn-primary" id="btn-mode-quick" data-i18n="menu.quick">Quick Race</button>
+          <button class="btn btn-primary" id="btn-mode-quick" data-i18n="menu.quick" data-nav-default>Quick Race</button>
           <button class="btn btn-primary" id="btn-mode-gp" data-i18n="menu.grandprix">Grand Prix</button>
           <button class="btn btn-primary" id="btn-mode-tt" data-i18n="menu.timetrial">Time Trial</button>
           <button class="btn btn-primary" id="btn-mode-battle" data-i18n="menu.battle">Battle Mode</button>
-          <button class="btn" id="btn-mode-back" data-i18n="menu.back">Back</button>
+          <button class="btn" id="btn-mode-back" data-i18n="menu.back" data-nav-back>Back</button>
         </div>
       </div>
     </div>
@@ -266,7 +287,7 @@
             </div>
           </div>
         </div>
-        <button class="btn" id="btn-tracksel-back" data-i18n="menu.back">Back</button>
+        <button class="btn" id="btn-tracksel-back" data-i18n="menu.back" data-nav-back>Back</button>
       </div>
     </div>
 
@@ -284,8 +305,8 @@
           <div id="arena-preview-teach" class="preview-teach"></div>
         </div>
         <div class="menu-buttons">
-          <button class="btn btn-primary" id="btn-battle-start" data-i18n="battle.start">Start Battle</button>
-          <button class="btn" id="btn-battlesel-back" data-i18n="menu.back">Back</button>
+          <button class="btn btn-primary" id="btn-battle-start" data-i18n="battle.start" data-nav-default>Start Battle</button>
+          <button class="btn" id="btn-battlesel-back" data-i18n="menu.back" data-nav-back>Back</button>
         </div>
       </div>
     </div>
@@ -295,7 +316,7 @@
       <div class="menu-card wide-card">
         <h2 data-i18n="menu.selectCup">Select Cup</h2>
         <div id="cup-list" class="list-scroll"></div>
-        <button class="btn" id="btn-cupsel-back" data-i18n="menu.back">Back</button>
+        <button class="btn" id="btn-cupsel-back" data-i18n="menu.back" data-nav-back>Back</button>
       </div>
     </div>
 
@@ -303,24 +324,34 @@
     <div id="screen-pause" class="screen hidden">
       <div class="menu-card">
         <h2 data-i18n="pause.title">Paused</h2>
+        <div class="pause-race-tag" id="pause-race-tag" data-i18n="pause.raceInProgress">Race in progress</div>
         <div class="menu-buttons">
-          <button class="btn btn-primary" id="btn-resume" data-i18n="menu.resume">Resume</button>
+          <button class="btn btn-primary" id="btn-resume" data-i18n="menu.resume" data-nav-back data-nav-default>Resume</button>
+          <button class="btn" id="btn-pause-settings" data-i18n="menu.settings">Settings</button>
           <button class="btn" id="btn-pause-restart" data-i18n="menu.restart">Restart</button>
           <button class="btn" id="btn-pause-menu" data-i18n="menu.main">Main Menu</button>
         </div>
+        <div class="pause-hint" data-i18n="pause.settingsHint">Settings apply live - the race stays paused while you tune them.</div>
       </div>
     </div>
 
     <!-- ===================== RESULTS ===================== -->
     <div id="screen-results" class="screen hidden">
+      <!-- celebration layer: sparks are injected by HUDManager.showResults -->
+      <div id="results-confetti" aria-hidden="true"></div>
       <div class="menu-card results-card scrollable-card">
+        <div id="results-medal" class="hidden" aria-hidden="true">
+          <i class="medal-ring"></i>
+          <i class="medal-ring medal-ring-2"></i>
+          <span id="results-medal-rank">1</span>
+        </div>
         <h2 data-i18n="results.title">Race Results</h2>
         <div id="results-headline"></div>
         <div id="results-rows"></div>
         <div id="results-stats"></div>
         <div id="results-extra"></div>
         <div class="menu-buttons">
-          <button class="btn btn-primary" id="btn-results-restart" data-i18n="menu.restart">Restart</button>
+          <button class="btn btn-primary" id="btn-results-restart" data-i18n="menu.restart" data-nav-default>Restart</button>
           <button class="btn" id="btn-results-menu" data-i18n="menu.main">Main Menu</button>
         </div>
       </div>

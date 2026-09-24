@@ -27,6 +27,25 @@ export const REMAPPABLE_ACTIONS = [
   'throttle', 'brake', 'left', 'right', 'drift', 'trick', 'item', 'reset', 'pause', 'confirm',
 ];
 
+// W3C standard gamepad mapping (Xbox / PS / Switch Pro).
+export const PAD = {
+  A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7,
+  BACK: 8, START: 9, LS: 10, RS: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15,
+};
+
+// Menu navigation feel: a direction fires immediately on press, then repeats
+// after a short delay so long lists and sliders can be swept by holding.
+const UI_REPEAT_DELAY = 400;   // ms before auto-repeat starts
+const UI_REPEAT_RATE = 105;    // ms between repeats
+const UI_STICK_THRESHOLD = 0.55;
+
+const UI_DIRS = ['up', 'down', 'left', 'right'];
+
+const NULL_UI = Object.freeze({ up: false, down: false, left: false, right: false });
+
+const nowMs = () => (typeof performance !== 'undefined' && performance.now
+  ? performance.now() : Date.now());
+
 const SCROLL_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 
 // Human-readable label for a KeyboardEvent.code, used by the bindings UI.
@@ -61,9 +80,16 @@ export class InputManager {
     this._rebuildMap();
 
     // gamepad state (filled by poll())
-    this._gp = { buttons: [], steer: 0, throttle: 0, brake: 0, steerDigital: 0 };
+    this._gp = { buttons: [], steer: 0, throttle: 0, brake: 0, steerDigital: 0,
+                 ui: { up: false, down: false, left: false, right: false } };
     this._gpPrevButtons = [];
     this._gpPressed = new Set();    // gamepad edge-triggered actions
+
+    // menu-navigation state: per-direction hold tracking + auto-repeat
+    this._uiPrev = { up: false, down: false, left: false, right: false };
+    this._uiFire = { up: false, down: false, left: false, right: false };
+    this._uiNext = { up: 0, down: 0, left: 0, right: 0 };
+    this._padUsed = false;          // a pad drove the UI at least once
 
     window.addEventListener('gamepadconnected', () => { this.gamepadConnected = true; });
     window.addEventListener('gamepaddisconnected', () => { this.gamepadConnected = false; });
@@ -157,14 +183,62 @@ export class InputManager {
       for (const i of [0, 9]) edge(i, i === 0 ? 'confirm' : 'pause');
       edge(0, 'trick');
       edge(1, 'reset');
+      edge(1, 'back');      // B doubles as the menu "back" button
       edge(3, 'item');
+
+      // --- menu navigation -------------------------------------------------
+      // D-pad and left stick both drive the four UI directions; the stick also
+      // steers, but UI reads only happen while a screen is on top of the race.
+      const ay = gp.axes[1] ?? 0;
+      cur.ui.up = !!cur.buttons[PAD.UP] || ay < -UI_STICK_THRESHOLD;
+      cur.ui.down = !!cur.buttons[PAD.DOWN] || ay > UI_STICK_THRESHOLD;
+      cur.ui.left = !!cur.buttons[PAD.LEFT] || cur.steer > UI_STICK_THRESHOLD;
+      cur.ui.right = !!cur.buttons[PAD.RIGHT] || cur.steer < -UI_STICK_THRESHOLD;
     } else {
       cur.steer = 0; cur.throttle = 0; cur.brake = 0; cur.steerDigital = 0;
       cur.buttons.length = 0;
+      cur.ui.up = cur.ui.down = cur.ui.left = cur.ui.right = false;
     }
     this.gamepadConnected = connected;
     this._gpPrevButtons = cur.buttons.slice();
+    this._updateUiRepeat(connected ? cur.ui : NULL_UI);
   }
+
+  // Edge + auto-repeat for the four menu directions.
+  _updateUiRepeat(ui) {
+    const t = nowMs();
+    for (const dir of UI_DIRS) {
+      const held = !!ui[dir];
+      const prev = this._uiPrev[dir];
+      if (held && !prev) {
+        this._uiFire[dir] = true;
+        this._uiNext[dir] = t + UI_REPEAT_DELAY;
+        this._padUsed = true;
+      } else if (held && t >= this._uiNext[dir]) {
+        this._uiFire[dir] = true;
+        this._uiNext[dir] = t + UI_REPEAT_RATE;
+        this._padUsed = true;
+      } else {
+        this._uiFire[dir] = false;
+      }
+      if (!held) this._uiNext[dir] = 0;
+      this._uiPrev[dir] = held;
+    }
+  }
+
+  // ---------------------------------------------------------- menu queries
+  // True on the frame a pad direction fires (including auto-repeat).
+  uiPressed(dir) { return this.enabled && !!this._uiFire[dir]; }
+  uiHeld(dir) { return this.enabled && !!(this._gp.ui && this._gp.ui[dir]); }
+  // Gamepad-only edges: the UI navigator owns these so a focused button is
+  // never activated twice (once by the browser's native Enter/Space handling
+  // and once by the pad path).
+  padPressed(action) { return this.enabled && this._gpPressed.has(action); }
+  // Keyboard-only edges.
+  keyPressed(action) {
+    return this.enabled && this.keymap[action]?.some((c) => this.pressed.has(c));
+  }
+  get padUsedUI() { return this._padUsed; }
 
   _gpActionDown(action) {
     const g = this._gp;
