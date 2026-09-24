@@ -708,81 +708,162 @@ const PROPS = {
       }
     }
   },
-  // Volcanic ash field for Ashfall Run: obsidian spires, basalt columns,
-  // ash mounds and glowing lava cracks.
+  // Volcanic ash field for Ashfall Run — REFINED ASHFALL IDENTITY
+  // Black-glass dunes, cooled basalt, quenched tarn and ember flora.
   desert(group, track, rnd) {
     const spireMat = new THREE.MeshStandardMaterial({ color: 0x1c1a20, roughness: 0.85, flatShading: true });
+    const spireMat2 = new THREE.MeshStandardMaterial({ color: 0x221e28, roughness: 0.88, flatShading: true });
     const basaltMat = new THREE.MeshStandardMaterial({ color: 0x2e2a30, roughness: 0.95, flatShading: true });
     const ashMat = new THREE.MeshStandardMaterial({ color: 0x6a5f5c, roughness: 1 });
-    // obsidian spires
-    for (let i = 0; i < 26; i++) {
+    const ashMatLight = new THREE.MeshStandardMaterial({ color: 0x7a6e6b, roughness: 1 });
+    const emberMat = new THREE.MeshStandardMaterial({ color: 0x8a3a1a, roughness: 0.9, emissive: 0xff4a1a, emissiveIntensity: 0.12 });
+    // obsidian spires — taller, sharper, with glass shards
+    for (let i = 0; i < 28; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
+      if (Math.abs((s/track.L)-0.32) < 0.05) continue; // keep tarn clear
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 9 + rnd() * 30;
-      const h = 5 + rnd() * 12;
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(1.2 + rnd() * 2.2, h, 5), spireMat);
+      const dist = p.width / 2 + 10 + rnd() * 32;
+      const h = 6 + rnd() * 13;
+      const mat = rnd()>0.5 ? spireMat : spireMat2;
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(1.1 + rnd() * 2.4, h, 5), mat);
       spire.position.copy(p.pos).addScaledVector(p.right, side * dist);
-      spire.position.y = p.pos.y + h / 2 - 1;
-      spire.rotation.z = (rnd() - 0.5) * 0.24;
+      spire.position.y = p.pos.y + h / 2 - 1.1;
+      spire.rotation.z = (rnd() - 0.5) * 0.30;
       spire.rotation.y = rnd() * Math.PI;
       group.add(spire);
+      // glass shard at base
+      if (rnd()>0.6) {
+        const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.6+ rnd()*0.7,0), new THREE.MeshStandardMaterial({ color: 0x111016, roughness:0.35, metalness:0.35 }));
+        shard.position.copy(spire.position); shard.position.y = p.pos.y + 0.12;
+        shard.rotation.set(rnd()*Math.PI, rnd()*Math.PI, rnd()*Math.PI);
+        group.add(shard);
+      }
     }
-    // basalt column field (instanced hex columns)
+    // basalt column field (instanced hex columns) — denser
     const colGeo = new THREE.CylinderGeometry(0.9, 1.3, 1, 6);
-    const N_C = 30;
+    const N_C = 36;
     const cols = new THREE.InstancedMesh(colGeo, basaltMat, N_C);
     const d = new THREE.Object3D();
     for (let i = 0; i < N_C; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
+      if (Math.abs((s/track.L)-0.32) < 0.05) { i--; continue; }
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 12 + rnd() * 34;
-      const h = 3 + rnd() * 7;
+      const dist = p.width / 2 + 12 + rnd() * 36;
+      const h = 2.8 + rnd() * 8;
       d.position.copy(p.pos).addScaledVector(p.right, side * dist);
-      d.position.y = p.pos.y + h / 2 - 0.8;
-      d.scale.set(0.7 + rnd() * 0.9, h, 0.7 + rnd() * 0.9);
+      d.position.y = p.pos.y + h / 2 - 0.9;
+      d.scale.set(0.68 + rnd() * 0.95, h, 0.68 + rnd() * 0.95);
       d.rotation.set(0, rnd() * Math.PI, 0);
       d.updateMatrix();
       cols.setMatrixAt(i, d.matrix);
     }
     cols.instanceMatrix.needsUpdate = true;
     group.add(cols);
-    // ash mounds (instanced flattened spheres)
+    // ash mounds (instanced flattened spheres) + scorched tufts
     const moundGeo = new THREE.SphereGeometry(1, 8, 6);
-    const N_M = 22;
+    const N_M = 26;
     const mounds = new THREE.InstancedMesh(moundGeo, ashMat, N_M);
     for (let i = 0; i < N_M; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
+      if (Math.abs((s/track.L)-0.32) < 0.045) { i--; continue; }
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 8 + rnd() * 30;
-      const r = 4 + rnd() * 9;
+      const dist = p.width / 2 + 9 + rnd() * 32;
+      const r = 4.5 + rnd() * 9;
       d.position.copy(p.pos).addScaledVector(p.right, side * dist);
       d.position.y = p.pos.y - r * 0.22;
-      d.scale.set(r, r * 0.3, r * 0.8);
+      d.scale.set(r, r * 0.32, r * 0.82);
       d.rotation.set(0, rnd() * Math.PI, 0);
       d.updateMatrix();
       mounds.setMatrixAt(i, d.matrix);
     }
     mounds.instanceMatrix.needsUpdate = true;
     group.add(mounds);
-    // glowing lava cracks hugging the road
+    // glowing lava cracks hugging the road + ember bloom strips
     const crackMat = new THREE.MeshBasicMaterial({
-      color: 0xff5d1a, transparent: true, opacity: 0.55,
+      color: 0xff5d1a, transparent: true, opacity: 0.58,
       blending: THREE.AdditiveBlending, depthWrite: false,
     });
-    for (let i = 0; i < 10; i++) {
+    const crackMat2 = new THREE.MeshBasicMaterial({
+      color: 0xff8a24, transparent: true, opacity: 0.32,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    for (let i = 0; i < 12; i++) {
       const s = rnd() * track.L;
       const p = track.pointAt(s);
       const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 3 + rnd() * 6;
-      const crack = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 7 + rnd() * 8), crackMat);
+      const dist = p.width / 2 + 2.8 + rnd() * 6.5;
+      const crack = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 7 + rnd() * 9), crackMat);
       crack.rotation.x = -Math.PI / 2;
-      crack.rotation.z = Math.atan2(-p.dir.z, p.dir.x) + (rnd() - 0.5) * 0.4;
+      crack.rotation.z = Math.atan2(-p.dir.z, p.dir.x) + (rnd() - 0.5) * 0.45;
       crack.position.copy(p.pos).addScaledVector(p.right, side * dist);
-      crack.position.y += 0.06;
+      crack.position.y += 0.07;
       group.add(crack);
+      if (rnd()>0.5){
+        const glow = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 7+ rnd()*9), crackMat2);
+        glow.rotation.x = -Math.PI/2;
+        glow.rotation.z = crack.rotation.z;
+        glow.position.copy(crack.position); glow.position.y += 0.02;
+        group.add(glow);
+      }
+    }
+    // cooled lava river ribbon along inner canyon bend (subtle)
+    {
+      const riverMat = new THREE.MeshStandardMaterial({ color: 0x1a1214, roughness: 0.9 });
+      const lavaMat = new THREE.MeshBasicMaterial({ color: 0xff5d1a, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite:false });
+      for(let s= track.L*0.58; s< track.L*0.78; s+= 7){
+        const p = track.pointAt(s);
+        const side = 1;
+        const center = p.pos.clone().addScaledVector(p.right, side*(p.width/2 + 9));
+        center.y = p.pos.y - 1.1;
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(4, 0.6, 7), riverMat);
+        seg.position.copy(center); seg.rotation.y = Math.atan2(p.dir.x, p.dir.z);
+        group.add(seg);
+        const flow = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 6), lavaMat);
+        flow.rotation.x = -Math.PI/2; flow.rotation.z = seg.rotation.y;
+        flow.position.copy(center); flow.position.y += 0.32;
+        group.add(flow);
+      }
+    }
+    // scorched flora: charcoal shrubs, ash-column pines, ember flowers
+    const charShrubMat = new THREE.MeshStandardMaterial({ color: 0x3a2f2a, roughness:1 });
+    const pineMat = new THREE.MeshStandardMaterial({ color: 0x2e2a28, roughness:1 });
+    const flowerCols = [0xff6a3c, 0xffb84a, 0xff8ae8, 0xa0e8ff].map(c=> new THREE.MeshBasicMaterial({color:c}));
+    for(let i=0;i<18;i++){
+      const s = rnd()*track.L; const p = track.pointAt(s);
+      if (Math.abs((s/track.L)-0.32) < 0.06) continue;
+      const side = rnd()>0.5?1:-1; const dist = p.width/2 + 8 + rnd()*24;
+      const base = p.pos.clone().addScaledVector(p.right, side*dist);
+      if (rnd()>0.5){
+        // charcoal pine
+        const h = 2.5 + rnd()*3.2;
+        const pine = new THREE.Mesh(new THREE.ConeGeometry(0.85, h, 6), pineMat);
+        pine.position.copy(base); pine.position.y = p.pos.y + h/2 -0.4;
+        group.add(pine);
+      } else {
+        // shrub
+        const sh = new THREE.Mesh(new THREE.SphereGeometry(0.55+ rnd()*0.5,6,5), charShrubMat);
+        sh.scale.y = 0.65; sh.position.copy(base); sh.position.y = p.pos.y + 0.28;
+        group.add(sh);
+      }
+      if (rnd()>0.65){
+        const fl = new THREE.Mesh(new THREE.SphereGeometry(0.13,5,4), flowerCols[Math.floor(rnd()*4)]);
+        fl.position.copy(base); fl.position.y = p.pos.y + 0.42 + rnd()*0.2;
+        fl.position.x += (rnd()-0.5)*0.6; fl.position.z += (rnd()-0.5)*0.6;
+        group.add(fl);
+      }
+    }
+    // ashfall particulate veil — subtle fog sheets
+    {
+      const veilMat = new THREE.MeshBasicMaterial({ color: 0x6a5f5c, transparent:true, opacity:0.07, depthWrite:false, side: THREE.DoubleSide });
+      for(let i=0;i<3;i++){
+        const veil = new THREE.Mesh(new THREE.PlaneGeometry(420, 90), veilMat);
+        veil.position.set((rnd()-0.5)*180, 16 + rnd()*14, (rnd()-0.5)*180);
+        veil.rotation.y = rnd()*Math.PI;
+        group.add(veil);
+      }
     }
   },
   mountain(group, track, rnd) {
@@ -1035,21 +1116,32 @@ function makeSignTexture(text, colorHex) {
 }
 
 const FLAVORS = {
-  // ----------------------------------------------------------- ashfall_run
+  // ----------------------------------------------------------- ashfall_run — REFORGED ASHFALL IDENTITY
+  // Volcanic glass desert, quenched tarn with reactive water, ember wildlife
   ashfall_run(group, track, rnd, state, colliders) {
+    // ensure puddle container exists for main-loop water handling (mirrors Sunforge)
+    state.puddles = state.puddles || [];
+    state.ripples = state.ripples || [];
     const p0 = track.pointAt(track.L * 0.7);
     const vx = p0.pos.x + p0.right.x * 130;
     const vz = p0.pos.z + p0.right.z * 130;
-    // distant volcano with glowing crater + rising smoke
+    // distant volcano with glowing crater + rising smoke — more detailed rim
     const volc = new THREE.Mesh(new THREE.ConeGeometry(75, 115, 9),
       new THREE.MeshStandardMaterial({ color: 0x241c1e, roughness: 1, flatShading: true }));
     volc.position.set(vx, 57, vz);
     group.add(volc);
+    // rim torus
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(24, 3.2, 8, 18),
+      new THREE.MeshStandardMaterial({ color: 0x1e1a22, roughness: 0.9 }));
+    rim.rotation.x = Math.PI/2; rim.position.set(vx, 110, vz); group.add(rim);
     const crater = new THREE.Mesh(new THREE.CircleGeometry(24, 16),
       new THREE.MeshBasicMaterial({ color: 0xff6a20, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
     crater.rotation.x = -Math.PI / 2;
     crater.position.set(vx, 112, vz);
     group.add(crater);
+    // inner magma pool glow
+    const innerGlow = new THREE.Mesh(new THREE.CircleGeometry(12, 16), new THREE.MeshBasicMaterial({ color: 0xff8a24, transparent:true, opacity:0.42, blending: THREE.AdditiveBlending, depthWrite:false }));
+    innerGlow.rotation.x = -Math.PI/2; innerGlow.position.set(vx, 112.2, vz); group.add(innerGlow);
     const smokes = [];
     for (let i = 0; i < 5; i++) {
       const smMat = new THREE.MeshStandardMaterial({ color: 0x3a3238, transparent: true, opacity: 0.55, flatShading: true });
@@ -1058,10 +1150,15 @@ const FLAVORS = {
       group.add(sm);
       smokes.push({ m: sm, y0: 122 + i * 13, ph: rnd() * 6, x0: vx });
     }
+    // ash veil sheets drifting across caldera
+    const veilMat = new THREE.MeshBasicMaterial({ color: 0x5a4a44, transparent:true, opacity:0.09, depthWrite:false, side: THREE.DoubleSide });
+    const veils = [];
+    for(let i=0;i<2;i++){ const veil = new THREE.Mesh(new THREE.PlaneGeometry(140, 70), veilMat); veil.position.set(vx + (rnd()-0.5)*60, 88+ rnd()*12, vz + (rnd()-0.5)*60); veil.rotation.y = rnd()*Math.PI; veils.push(veil); group.add(veil); }
     state.extras.push((dt, time) => {
       const pulse = 0.75 + Math.sin(time * 1.4) * 0.25;
       crater.material.opacity = 0.6 + pulse * 0.35;
       crater.scale.setScalar(0.9 + pulse * 0.15);
+      innerGlow.material.opacity = 0.34 + pulse*0.16;
       for (const sm of smokes) {
         sm.m.position.y = sm.y0 + ((time * 3 + sm.ph * 10) % 55);
         sm.m.position.x = sm.x0 + Math.sin(time * 0.4 + sm.ph) * 6;
@@ -1069,9 +1166,10 @@ const FLAVORS = {
         sm.m.material.opacity = 0.55 * (1 - f);
         sm.m.scale.setScalar(1 + f * 0.8);
       }
+      for(let i=0;i<veils.length;i++) veils[i].material.opacity = 0.06 + Math.sin(time*0.4 + i)*0.03;
     });
 
-    // obsidian gate over the start straight
+    // obsidian gate over the start straight — with side braziers
     const gateAt = track.pointAt(track.L * 0.045);
     const gHalf = gateAt.width / 2 + 3.5;
     const obsMat = new THREE.MeshStandardMaterial({ color: 0x1c1a22, roughness: 0.85, flatShading: true });
@@ -1087,6 +1185,12 @@ const FLAVORS = {
       rune.position.x -= gateAt.right.x * side * 1.3;
       rune.position.z -= gateAt.right.z * side * 1.3;
       group.add(rune);
+      // brazier on each pillar
+      const brazier = new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.9,1,7), new THREE.MeshStandardMaterial({ color: 0x2a2328 }));
+      brazier.position.copy(col.position); brazier.position.y += 8.2; group.add(brazier);
+      const bFlame = new THREE.Mesh(new THREE.ConeGeometry(0.55,1.2,6), new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent:true, opacity:0.88, blending: THREE.AdditiveBlending, depthWrite:false }));
+      bFlame.position.copy(brazier.position); bFlame.position.y += 0.85; group.add(bFlame);
+      state.extras.push((dt,time)=>{ const f=0.85+ Math.sin(time*4+ side)*0.18; bFlame.scale.set(1,f,1); bFlame.material.opacity=0.72+ Math.sin(time*4+ side)*0.12; });
     }
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(gHalf * 2 + 3, 2.6, 3.2), obsMat);
     lintel.position.copy(gateAt.pos);
@@ -1094,8 +1198,17 @@ const FLAVORS = {
     lintel.rotation.y = yawFor(gateAt.dir);
     group.add(lintel);
     colliders.push(new THREE.Box3().setFromObject(lintel));
+    // hanging chains with ember charm
+    for(const side of [1,-1]){
+      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,4.2,4), new THREE.MeshStandardMaterial({ color: 0x5a4a3a, metalness:0.45 }));
+      chain.position.copy(gateAt.pos).addScaledVector(gateAt.right, side*(gHalf*0.55));
+      chain.position.y += 13.5; group.add(chain);
+      const charm = new THREE.Mesh(new THREE.OctahedronGeometry(0.42,0), new THREE.MeshBasicMaterial({ color: 0xff8a24, transparent:true, opacity:0.85 }));
+      charm.position.copy(chain.position); charm.position.y -= 2.4; group.add(charm);
+      state.extras.push((dt,time)=>{ charm.rotation.y = time*0.9; charm.position.y = chain.position.y -2.4 + Math.sin(time*1.2+ side)*0.12; });
+    }
 
-    // ember vents with flickering flames
+    // ember vents with flickering flames — add steam + ash puffs
     const rockMat = new THREE.MeshStandardMaterial({ color: 0x221e24, roughness: 1, flatShading: true });
     const vents = [];
     const fracs = [0.09, 0.2, 0.33, 0.47, 0.58, 0.72, 0.83, 0.93];
@@ -1130,6 +1243,168 @@ const FLAVORS = {
         v.core.scale.setScalar(f);
       }
     });
+
+    // === Quenched tarn — reactive water puddle astride the road (distinctive Ashfall glass water) ===
+    {
+      const prog = track.L * 0.32;
+      const pp = track.pointAt(prog);
+      const center = pp.pos.clone().addScaledVector(pp.right, 0.15);
+      center.y = pp.pos.y + 0.05;
+      const radius = 6.0;
+      const puddleGeo = new THREE.CircleGeometry(radius, 26);
+      const pa = puddleGeo.attributes.position;
+      for(let i=0;i<pa.count;i++){
+        const x=pa.getX(i), y=pa.getY(i); const d=Math.hypot(x,y);
+        if(d>0.2){ const ang=Math.atan2(y,x); const wob=1+ Math.sin(ang*4+ i*0.6)*0.07 + Math.cos(ang*3)*0.04; pa.setX(i,x*wob); pa.setY(i,y*wob*0.92); }
+      }
+      puddleGeo.computeVertexNormals();
+      const puddleMat = new THREE.MeshStandardMaterial({ color: 0x2e4a52, roughness:0.14, metalness:0.32, transparent:true, opacity:0.90, emissive:0x182830, emissiveIntensity:0.10 });
+      const puddleMesh = new THREE.Mesh(puddleGeo, puddleMat);
+      puddleMesh.rotation.x = -Math.PI/2; puddleMesh.rotation.z = yawFor(pp.dir);
+      puddleMesh.position.copy(center); puddleMesh.position.y += 0.07;
+      puddleMesh.name='Ashfall quenched tarn'; group.add(puddleMesh);
+      // shoreline obsidian shards + ash stones
+      const shardMat = new THREE.MeshStandardMaterial({ color: 0x0e0e16, roughness:0.45, metalness:0.3 });
+      const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness:1 });
+      for(let i=0;i<18;i++){
+        const a=(i/18)*Math.PI*2; const rr=radius*0.94 + (rnd()-0.5)*0.9;
+        const sx=center.x + Math.cos(a)*rr; const sz=center.z + Math.sin(a)*rr;
+        const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.32+ rnd()*0.42,0), i%2? shardMat: stoneMat);
+        shard.position.set(sx, center.y+0.03, sz); shard.scale.y=0.6; shard.rotation.set(rnd()*0.6, rnd()*Math.PI, rnd()*0.6); group.add(shard);
+      }
+      const highlight = new THREE.Mesh(new THREE.CircleGeometry(radius*0.48,16), new THREE.MeshBasicMaterial({ color: 0xd6eef5, transparent:true, opacity:0.14, blending: THREE.AdditiveBlending, depthWrite:false }));
+      highlight.rotation.x=-Math.PI/2; highlight.position.copy(center); highlight.position.y+=0.09; group.add(highlight);
+      // steam wisps
+      const steams=[]; const steamMat = new THREE.MeshBasicMaterial({ color: 0xc8d8de, transparent:true, opacity:0.10, depthWrite:false });
+      for(let i=0;i<3;i++){ const sMesh = new THREE.Mesh(new THREE.SphereGeometry(1.1+ rnd()*0.6,6,5), steamMat.clone()); sMesh.position.set(center.x+ (rnd()-0.5)*3, center.y+0.8+ rnd()*1.2, center.z+ (rnd()-0.5)*3); sMesh.scale.y=1.6; steams.push({m:sMesh, y0: sMesh.position.y, ph: rnd()*6, x0: sMesh.position.x}); group.add(sMesh); }
+      const ripples=[]; state.puddles.push({ center: center.clone(), radius, mesh: puddleMesh, highlight, ripples, _lastRipple:0 });
+      const spawnRipple = (pos)=>{
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.38,0.58,18), new THREE.MeshBasicMaterial({ color: 0x8ac8e0, transparent:true, opacity:0.58, side: THREE.DoubleSide, depthWrite:false }));
+        ring.rotation.x=-Math.PI/2; ring.position.set(pos.x, center.y+0.11, pos.z); ring.userData.t=0; group.add(ring); ripples.push(ring);
+      };
+      state.spawnPuddleRipple = state.spawnPuddleRipple || spawnRipple;
+      // if multiple puddles, keep array; first puddle's spawner used by main-loop, but store per-puddle too
+      const mySpawn = spawnRipple;
+      state.extras.push((dt,time)=>{
+        puddleMat.emissiveIntensity = 0.08 + Math.sin(time*1.15)*0.022;
+        highlight.position.x = center.x + Math.sin(time*0.38)*0.14;
+        highlight.position.z = center.z + Math.cos(time*0.34)*0.14;
+        for(let i=ripples.length-1;i>=0;i--){ const r=ripples[i]; r.userData.t+=dt; const t=r.userData.t; const s=1+ t*3.1; r.scale.setScalar(s); r.material.opacity=Math.max(0,0.58- t*0.92); if(t>0.78){ group.remove(r); r.geometry.dispose(); r.material.dispose(); ripples.splice(i,1);} }
+        for(const st of steams){ st.m.position.y = st.y0 + ((time*0.7 + st.ph)%4); st.m.position.x = st.x0 + Math.sin(time*0.35+ st.ph)*0.9; st.m.material.opacity=0.11*(1- ((st.m.position.y- st.y0)/4)); st.m.scale.setScalar(1+ ((st.m.position.y- st.y0)/4)*0.6); }
+      });
+      // slippery physics for the tarn
+      track.zones.push({ s0: prog-7, s1: prog+7, type:'slippery', v:0.52 });
+      // expose merged spawner that fans out to all puddles
+      const existing = state.spawnPuddleRipple;
+      state.spawnPuddleRipple = (pos)=>{
+        // find nearest puddle
+        let best=null, bestD=Infinity;
+        for(const pud of state.puddles){ const d = pos.distanceToSquared(pud.center); if(d < bestD){ bestD=d; best=pud; } }
+        if(best && bestD < 120){ // within ~11m
+          const ring = new THREE.Mesh(new THREE.RingGeometry(0.38,0.58,18), new THREE.MeshBasicMaterial({ color: 0x8ac8e0, transparent:true, opacity:0.58, side: THREE.DoubleSide, depthWrite:false }));
+          ring.rotation.x=-Math.PI/2; ring.position.set(pos.x, best.center.y+0.11, pos.z); ring.userData.t=0; group.add(ring); best.ripples.push(ring);
+        } else { existing(pos); }
+      };
+    }
+
+    // === Ashfall wildlife — safely outside, ambient only ===
+    {
+      state.animals = state.animals || [];
+      const placeOutside = (frac, side, extra)=>{
+        const p = track.pointAt(frac*track.L);
+        const dist = p.width/2 + 12 + extra;
+        const pos = p.pos.clone().addScaledVector(p.right, side*dist);
+        pos.y = p.pos.y;
+        return { p, pos };
+      };
+      // ash hares (pale, dusty)
+      for(let i=0;i<2;i++){
+        const {pos} = placeOutside(0.18 + i*0.38, i%2?1:-1, 13+ rnd()*10);
+        const hare = new THREE.Group(); hare.name='Ash hare';
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd8c8b8, roughness:1 });
+        const earMat = new THREE.MeshStandardMaterial({ color: 0x6a5f5c, roughness:1 });
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17,0.42,4,6), bodyMat); body.rotation.z=Math.PI/2; body.position.y=0.24; hare.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.15,6,5), bodyMat); head.position.set(0.24,0.32,0); hare.add(head);
+        for(const sx of [1,-1]){ const ear=new THREE.Mesh(new THREE.CapsuleGeometry(0.04,0.28,4,4), earMat); ear.position.set(0.26,0.46, sx*0.06); hare.add(ear); }
+        hare.position.copy(pos); hare.position.y=0.02; group.add(hare);
+        state.animals.push({ mesh: hare, type:'hare', base: pos.clone(), phase: rnd()*6, hopT: rnd()*2 });
+      }
+      // cinder crows circling ash columns (ground crows pecking)
+      for(let i=0;i<4;i++){
+        const {pos} = placeOutside(0.28 + i*0.15, 1, 10+ rnd()*12);
+        const crow = new THREE.Group(); crow.name='Cinder crow';
+        const bMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1e, roughness:1 });
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09,0.28,4,6), bMat); body.rotation.z=Math.PI/2; body.position.y=0.18; crow.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.08,5,4), bMat); head.position.set(0.18,0.20,0); crow.add(head);
+        const wingGeo = new THREE.PlaneGeometry(0.32,0.12);
+        const wMat = new THREE.MeshBasicMaterial({ color: 0x2a2a30, side: THREE.DoubleSide });
+        const w1=new THREE.Mesh(wingGeo,wMat); w1.position.set(0,0.20,0.10); crow.add(w1);
+        const w2=w1.clone(); w2.position.z=-0.10; crow.add(w2);
+        crow.position.copy(pos); crow.position.y=0.02; group.add(crow);
+        state.animals.push({ mesh: crow, type:'crow', base: pos.clone(), phase: rnd()*6 });
+      }
+      // basalt lizards
+      for(let i=0;i<3;i++){
+        const {pos}=placeOutside(0.55+ i*0.18, -1, 9+ rnd()*9);
+        const lz=new THREE.Group(); const lMat=new THREE.MeshStandardMaterial({ color: 0x5a6a58, roughness:0.9 });
+        const body=new THREE.Mesh(new THREE.CapsuleGeometry(0.08,0.38,4,5), lMat); body.rotation.z=Math.PI/2; body.position.y=0.09; lz.add(body);
+        const tail=new THREE.Mesh(new THREE.CapsuleGeometry(0.05,0.32,4,4), lMat); tail.rotation.z=Math.PI/2; tail.position.set(-0.28,0.07,0); tail.name='tail'; lz.add(tail);
+        lz.position.copy(pos); lz.position.y=0.02; group.add(lz);
+        state.animals.push({ mesh: lz, type:'lizard', base: pos.clone(), phase: rnd()*6 });
+      }
+      // distant ash fox trotting along ridge
+      {
+        const {pos}=placeOutside(0.62, -1, 28);
+        const fox=new THREE.Group(); const fMat=new THREE.MeshStandardMaterial({ color: 0xb07a3a, roughness:1 });
+        const fMat2=new THREE.MeshStandardMaterial({ color: 0x2a1a12, roughness:1 });
+        const body=new THREE.Mesh(new THREE.CapsuleGeometry(0.20,0.64,4,6), fMat); body.rotation.z=Math.PI/2; body.position.y=0.34; fox.add(body);
+        const head=new THREE.Mesh(new THREE.ConeGeometry(0.17,0.32,6), fMat); head.rotation.z=-Math.PI/2; head.position.set(0.42,0.40,0); fox.add(head);
+        const tail=new THREE.Mesh(new THREE.CapsuleGeometry(0.10,0.44,4,5), fMat); tail.rotation.z=Math.PI/2; tail.position.set(-0.42,0.30,0); fox.add(tail);
+        for(const sx of [1,-1]) for(const fz of [0.16,-0.16]){ const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.05,0.26,4), fMat2); leg.position.set(fz,0.13,sx*0.11); fox.add(leg); }
+        fox.position.copy(pos); group.add(fox);
+        state.animals.push({ mesh: fox, type:'fox', base: pos.clone(), phase: rnd()*6 });
+      }
+      state.extras.push((dt,time)=>{
+        for(const a of state.animals){
+          if(a.type==='hare'){ a.hopT+=dt*2.0; const hop=Math.max(0, Math.sin(a.hopT))*0.16; a.mesh.position.y=0.02+ hop; a.mesh.rotation.y=Math.sin(time*0.45+ a.phase)*0.5; if(hop>0.01) a.mesh.position.x=a.base.x+ Math.sin(a.hopT*0.55)*0.35; }
+          else if(a.type==='crow'){ a.mesh.position.y=0.02+ Math.abs(Math.sin(time*2.2+ a.phase))*0.08; a.mesh.rotation.y= Math.sin(time*0.6+ a.phase)*0.7; const wob=Math.sin(time*8+ a.phase)*0.18; a.mesh.children.forEach(c=>{ if(c.isMesh && c.geometry.type==='PlaneGeometry') c.rotation.z=wob; }); }
+          else if(a.type==='lizard'){ const tail=a.mesh.getObjectByName('tail'); if(tail) tail.rotation.y=Math.sin(time*2.4+ a.phase)*0.32; a.mesh.rotation.y=Math.sin(time*0.3+ a.phase)*0.22; }
+          else if(a.type==='fox'){ const off=Math.sin(time*0.55+ a.phase)*1.6; a.mesh.position.x=a.base.x+ off*0.4; a.mesh.position.z=a.base.z+ Math.cos(time*0.48+ a.phase)*1.0; a.mesh.rotation.y=Math.sin(time*0.55+ a.phase)*0.5; }
+        }
+      });
+    }
+
+    // === Additional ashfall atmosphere: ember fireflies + ash veil ===
+    {
+      const N_EMB = 90;
+      const ePos=new Float32Array(N_EMB*3); const eBase=[];
+      for(let i=0;i<N_EMB;i++){
+        const s=rnd()*track.L; const p=track.pointAt(s);
+        const side=rnd()>0.5?1:-1; const dist=p.width/2+ 4+ rnd()*18;
+        const x=p.pos.x+ p.right.x*side*dist; const y=p.pos.y+ 1.2+ rnd()*5; const z=p.pos.z+ p.right.z*side*dist;
+        ePos[i*3]=x; ePos[i*3+1]=y; ePos[i*3+2]=z; eBase.push({x,y,z, ph: rnd()*6, sp: 0.35+ rnd()*0.55});
+      }
+      const eGeo=new THREE.BufferGeometry(); eGeo.setAttribute('position', new THREE.BufferAttribute(ePos,3));
+      const embers=new THREE.Points(eGeo, new THREE.PointsMaterial({ color: 0xff8a24, size:0.42, sizeAttenuation:true, transparent:true, opacity:0.85, blending: THREE.AdditiveBlending, depthWrite:false }));
+      group.add(embers);
+      state.extras.push((dt,time)=>{
+        const arr=eGeo.attributes.position.array;
+        for(let i=0;i<N_EMB;i++){ const b=eBase[i]; arr[i*3]=b.x+ Math.sin(time*b.sp+ b.ph)*1.6; arr[i*3+1]=b.y+ Math.sin(time*b.sp*1.3+ b.ph*2)*0.9 + (time*0.15%6)*0.1; arr[i*3+2]=b.z+ Math.cos(time*b.sp*0.9+ b.ph)*1.5; if(arr[i*3+1] > b.y+6) arr[i*3+1]=b.y; }
+        eGeo.attributes.position.needsUpdate=true; embers.material.opacity=0.78+ Math.sin(time*1.3)*0.12;
+      });
+    }
+    // distant ash hawks (high, slow)
+    {
+      const hawkMat=new THREE.MeshBasicMaterial({ color: 0x2e2a24, side: THREE.DoubleSide });
+      for(let i=0;i<3;i++){
+        const hawk=new THREE.Group(); const wGeo=new THREE.PlaneGeometry(2.1,0.62);
+        const w1=new THREE.Mesh(wGeo,hawkMat); w1.position.x=1.05; w1.rotation.z=0.32; hawk.add(w1);
+        const w2=new THREE.Mesh(wGeo,hawkMat); w2.position.x=-1.05; w2.rotation.z=-0.32; hawk.add(w2);
+        hawk.position.set(0, 52+ i*7, 0); group.add(hawk);
+        const a0=rnd()*Math.PI*2; const r=110+ rnd()*75; const sp=0.13+ rnd()*0.07;
+        state.extras.push((dt)=>{ const t=Date.now()*0.0001; hawk.position.set(Math.cos(a0+ t*sp)*r, 52+ i*7+ Math.sin(t*2+ i)*2.5, Math.sin(a0+ t*sp)*r); hawk.rotation.y= -a0 - t*sp; });
+      }
+    }
   },
 
   // ---------------------------------------------------------- verdant_loop

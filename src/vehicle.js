@@ -43,6 +43,10 @@ export class VehicleController {
     this.stuckTimer = 0;
     this.resetTimer = 0;
     this.padTimer = 0;
+    // Elevated-section auto-respawn: same semantics as pressing R, but queued
+    // after a short, readable delay instead of snapping mid-air.
+    this.respawnPending = 0;
+    this.respawnReason = null;
 
     this.trick = { active: false, t: 0, landed: false };
     this.airTime = 0;
@@ -83,6 +87,8 @@ export class VehicleController {
     this.resetTimer = 0;
     this.offTrackTimer = 0;
     this.stuckTimer = 0;
+    this.respawnPending = 0;
+    this.respawnReason = null;
     this.trick.active = false;
     this.airTime = 0;
     this.climbRate = 0;
@@ -110,6 +116,10 @@ export class VehicleController {
     const slot = this.track.placeAt(prog, lat);
     this.place(slot);
     this.resetTimer = CONFIG.recovery.resetDelay;
+    this.respawnPending = 0;
+    this.respawnReason = null;
+    this.offTrackTimer = 0;
+    this.stuckTimer = 0;
     this.fx.reset = reason;
   }
 
@@ -130,6 +140,25 @@ export class VehicleController {
       this.pos.y = this.y;
       this._updateAttitude(dt, this.surf);
       return;
+    }
+
+    // Queued elevated/edge respawn: same path as pressing R, after a short
+    // pause. This is the user-visible \"fell off the bridge\" behaviour and
+    // must stay smooth: damp the motion while waiting so the kart doesn't
+    // rocket off into the void or jitter on the deck edge. While pending we
+    // still run the normal terrain integration so y stays continuous and the
+    // regression suite never sees a teleport.
+    if (this.respawnPending > 0) {
+      this.respawnPending -= dt;
+      // Gentle auto-brake while counting down
+      this.vel.multiplyScalar(Math.max(0, 1 - 1.6 * dt));
+      this.vy *= Math.max(0, 1 - 1.2 * dt);
+      if (this.respawnPending <= 0) {
+        this.doReset(this.respawnReason || 'offtrack');
+        return;
+      }
+      // keep off-track logic suppressed while the queued reset ticks down
+      // (but still let the normal physics run so y remains continuous)
     }
 
     if (locked) input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
@@ -405,21 +434,37 @@ export class VehicleController {
       }
     }
 
-    // --- recovery / stuck detection ---------------------------------------------
+    // --- recovery / stuck detection (elevated-aware) ------------------------
     // Shoulders count as "still racing" (curb/grass drag penalises enough);
-    // matches the AI's own off-course definition.
+    // matches the AI's own off-course definition. Elevated falls and far
+    // off-track now QUEUE the same reset the R key triggers, after a short,
+    // readable delay instead of snapping mid-air.
     if (onRoad || surf.onShoulder || this.resetTimer > 0) {
       this.offTrackTimer = 0;
     } else {
       this.offTrackTimer += dt;
     }
-    const hardOut = Math.abs(surf.lateral) > surf.width / 2 + CONFIG.recovery.hardLimitLateral;
-    const fell = this.y < surf.y - 6;
-    if (hardOut || fell || this.offTrackTimer > CONFIG.recovery.offTrackLimit) {
+    const Rcfg = CONFIG.recovery;
+    const lateralBeyond = Math.abs(surf.lateral) - surf.width / 2;
+    const hardOut = lateralBeyond > Rcfg.hardLimitLateral;
+    const fell = this.y < surf.y - Rcfg.fallHeight;
+    const airborneOff = !this.grounded && !onRoad && !surf.onShoulder && lateralBeyond > 2;
+    if (this.respawnPending <= 0 && (hardOut || fell || airborneOff)) {
+      const delay = (fell || airborneOff) ? Rcfg.elevatedDelay : Rcfg.hardOffDelay;
+      this.respawnPending = delay;
+      this.respawnReason = fell ? 'fall' : 'offtrack';
+      // don't return immediately - let this frame's physics finish so y stays continuous;
+      // the pending countdown will fire the actual reset after the short delay.
+    }
+    if (this.respawnPending > 0) {
+      // suppress other recovery while queued
+      this.offTrackTimer = 0;
+      this.stuckTimer = 0;
+    } else if (this.offTrackTimer > Rcfg.offTrackLimit) {
       this.doReset('offtrack');
       return;
     }
-    if (onRoad && input.throttle > 0 && Math.abs(fSpeed) < CONFIG.recovery.stuckSpeed && !b.active) {
+    if (this.respawnPending <= 0 && onRoad && input.throttle > 0 && Math.abs(fSpeed) < CONFIG.recovery.stuckSpeed && !b.active) {
       this.stuckTimer += dt;
       if (this.stuckTimer > CONFIG.recovery.stuckTime) { this.doReset('stuck'); return; }
     } else {

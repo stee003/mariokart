@@ -32,7 +32,7 @@ const yawFor = (dir) => Math.atan2(dir.x, dir.z);
 export function buildEnvironment(scene, track) {
   const group = new THREE.Group();
   const colliders = [];
-  const state = { padMaterials: [], gearMonuments: [], extras: [], padGlow: [] };
+  const state = { padMaterials: [], gearMonuments: [], extras: [], padGlow: [], puddles: [], ripples: [], animals: [], tumbleweeds: [] };
 
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -635,6 +635,512 @@ export function buildEnvironment(scene, track) {
   }
   bushes.instanceMatrix.needsUpdate = true;
   group.add(bushes);
+  // ------------------------------------------------------------------
+  // SUNFORGE REFINEMENT: enhanced visual identity, water, animals
+  // ------------------------------------------------------------------
+
+  // === God rays / light shafts ===
+  {
+    const rayMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.06, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const rays = new THREE.Group();
+    rays.name = 'Sun god rays';
+    for (let i = 0; i < 5; i++) {
+      const ray = new THREE.Mesh(new THREE.PlaneGeometry(38 + i*12, 420), rayMat);
+      ray.position.set(-40 + i*45, 115, -180 + i*20);
+      ray.rotation.z = 0.12 + i*0.04;
+      ray.rotation.y = 0.35;
+      rays.add(ray);
+    }
+    group.add(rays);
+    state.extras.push((dt, time) => {
+      const o = 0.045 + Math.sin(time*0.35)*0.015;
+      for (const ray of rays.children) ray.material.opacity = o + (Math.random()-0.5)*0.008;
+    });
+  }
+
+  // === Heat haze shimmer over distant sand ===
+  {
+    const hazeGeo = new THREE.PlaneGeometry(720, 720);
+    const hazeCanvas = document.createElement('canvas');
+    hazeCanvas.width = 256; hazeCanvas.height = 256;
+    const hc = hazeCanvas.getContext('2d');
+    hc.fillStyle = '#e9c29a'; hc.fillRect(0,0,256,256);
+    for (let i=0;i<600;i++){ hc.fillStyle='rgba(255,255,255,'+(0.04+Math.random()*0.08)+')'; hc.fillRect(Math.random()*256, Math.random()*256, 2,2); }
+    const hazeTex = new THREE.CanvasTexture(hazeCanvas);
+    hazeTex.wrapS = hazeTex.wrapT = THREE.RepeatWrapping; hazeTex.repeat.set(4,4);
+    const hazeMat = new THREE.MeshBasicMaterial({ map: hazeTex, transparent: true, opacity: 0.14, depthWrite: false });
+    const haze = new THREE.Mesh(hazeGeo, hazeMat);
+    haze.rotation.x = -Math.PI/2; haze.position.y = 0.02;
+    group.add(haze);
+    state.extras.push((dt)=>{ hazeTex.offset.x += dt*0.006; hazeTex.offset.y += dt*0.003; });
+  }
+
+  // === Oasis & interactive puddle ===
+  // Off-track oasis (visual landmark) + on-track puddle that reacts to the car
+  let puddleInfo = null;
+  let oasisMesh = null;
+  {
+    // Choose puddle location on a flat, visible straight: around f=0.265
+    const prog = track.L * 0.265;
+    const pp = track.pointAt(prog);
+    const center = pp.pos.clone().addScaledVector(pp.right, 0.2);
+    center.y = pp.pos.y + 0.04;
+    const radius = 6.2;
+
+    // Visible puddle - shallow desert wash crossing the road
+    const puddleGeo = new THREE.CircleGeometry(radius, 28);
+    // distort vertices slightly for organic shoreline
+    const posAttr = puddleGeo.attributes.position;
+    for (let i=0;i<posAttr.count;i++){
+      const x = posAttr.getX(i), y = posAttr.getY(i);
+      const d = Math.hypot(x,y);
+      if (d>0.1){
+        const ang = Math.atan2(y,x);
+        const wobble = 1 + Math.sin(ang*5 + i*0.7)*0.08 + Math.cos(ang*3)*0.05;
+        posAttr.setX(i, x*wobble);
+        posAttr.setY(i, y*wobble*0.9);
+      }
+    }
+    puddleGeo.computeVertexNormals();
+    const puddleMat = new THREE.MeshStandardMaterial({
+      color: 0x4a8da8, roughness: 0.12, metalness: 0.28, transparent: true, opacity: 0.88,
+      emissive: 0x1a3a4a, emissiveIntensity: 0.12
+    });
+    const puddleMesh = new THREE.Mesh(puddleGeo, puddleMat);
+    puddleMesh.rotation.x = -Math.PI/2;
+    puddleMesh.rotation.z = yawFor(pp.dir);
+    puddleMesh.position.copy(center);
+    puddleMesh.position.y += 0.06;
+    puddleMesh.name = 'Sunforge interactive puddle';
+    group.add(puddleMesh);
+
+    // shoreline stones
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x8a7060, roughness: 1, flatShading: true });
+    for (let i=0;i<16;i++){
+      const a = (i/16)*Math.PI*2;
+      const rr = radius*0.92 + (rnd()-0.5)*0.9;
+      const sx = center.x + Math.cos(a)*rr;
+      const sz = center.z + Math.sin(a)*rr;
+      const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.35+Math.random()*0.35,0), stoneMat);
+      stone.position.set(sx, center.y+0.02, sz);
+      stone.scale.set(1, 0.6, 1);
+      stone.rotation.set(Math.random()*0.6, Math.random()*Math.PI, Math.random()*0.6);
+      group.add(stone);
+    }
+    // subtle reflective highlight
+    const highlight = new THREE.Mesh(new THREE.CircleGeometry(radius*0.55, 18), new THREE.MeshBasicMaterial({ color: 0xd6eef5, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
+    highlight.rotation.x = -Math.PI/2;
+    highlight.position.copy(center); highlight.position.y += 0.07;
+    group.add(highlight);
+
+    // ripple rings that expand when driven through
+    const ripples = [];
+    state.puddles.push({ center: center.clone(), radius, mesh: puddleMesh, highlight, ripples });
+
+    // helper to spawn a ripple
+    const spawnRipple = (pos) => {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.5, 18), new THREE.MeshBasicMaterial({ color: 0x8ac8e0, transparent: true, opacity: 0.62, side: THREE.DoubleSide, depthWrite: false }));
+      ring.rotation.x = -Math.PI/2;
+      ring.position.set(pos.x, center.y+0.09, pos.z);
+      ring.userData.t = 0;
+      group.add(ring);
+      ripples.push(ring);
+    };
+    state.spawnPuddleRipple = spawnRipple;
+
+    // animate ripples and subtle water shimmer
+    state.extras.push((dt, time) => {
+      puddleMat.emissiveIntensity = 0.10 + Math.sin(time*1.2)*0.02;
+      highlight.position.x = center.x + Math.sin(time*0.4)*0.12;
+      highlight.position.z = center.z + Math.cos(time*0.35)*0.12;
+      for (let i=ripples.length-1;i>=0;i--){
+        const r = ripples[i];
+        r.userData.t += dt;
+        const t = r.userData.t;
+        const s = 1 + t*3.2;
+        r.scale.setScalar(s);
+        r.material.opacity = Math.max(0, 0.62 - t*0.95);
+        if (t>0.75){ group.remove(r); r.geometry.dispose(); r.material.dispose(); ripples.splice(i,1); }
+      }
+    });
+
+    // Add zone-like slippery physics via track (pure visual zone but also grip)
+    // Push a short slippery microregion so VehicleController naturally loses grip
+    track.zones.push({ s0: prog-7, s1: prog+7, type: 'slippery', v: 0.58 });
+
+    // Off-track oasis pond (scenic, near canyon mouth)
+    const oasisProg = track.L * 0.78;
+    const op = track.pointAt(oasisProg);
+    const oasisCenter = op.pos.clone().addScaledVector(op.right, -(op.width/2 + 22));
+    oasisCenter.y = op.pos.y - 0.8;
+    const oasisGeo = new THREE.CircleGeometry(15, 24);
+    const oasisMat = new THREE.MeshStandardMaterial({ color: 0x2e7a88, roughness: 0.18, metalness: 0.35, transparent: true, opacity: 0.92 });
+    oasisMesh = new THREE.Mesh(oasisGeo, oasisMat);
+    oasisMesh.rotation.x = -Math.PI/2;
+    oasisMesh.position.set(oasisCenter.x, oasisCenter.y+0.12, oasisCenter.z);
+    group.add(oasisMesh);
+    const bankMat = new THREE.MeshStandardMaterial({ color: 0xc9ab7a, roughness: 1 });
+    const bank = new THREE.Mesh(new THREE.RingGeometry(15, 18, 24), bankMat);
+    bank.rotation.x = -Math.PI/2;
+    bank.position.set(oasisCenter.x, oasisCenter.y+0.05, oasisCenter.z);
+    group.add(bank);
+    // palms around oasis
+    const palmMatTrunk = new THREE.MeshStandardMaterial({ color: 0x6b4a2a, roughness: 1 });
+    const palmMatLeaf = new THREE.MeshStandardMaterial({ color: 0x2d7a3a, roughness: 0.8, flatShading: true });
+    const frondGeo = new THREE.ConeGeometry(0.55, 2.2, 5);
+    frondGeo.translate(0, 1.1, 0);
+    for (let i=0;i<7;i++){
+      const a = (i/7)*Math.PI*2 + rnd()*0.4;
+      const r = 12 + rnd()*5;
+      const pc = oasisCenter.clone().add(new THREE.Vector3(Math.cos(a)*r, 0, Math.sin(a)*r));
+      pc.y = oasisCenter.y;
+      const h = 4 + rnd()*2.5;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, h, 6), palmMatTrunk);
+      trunk.position.set(pc.x, pc.y + h/2, pc.z);
+      trunk.rotation.z = (rnd()-0.5)*0.15;
+      group.add(trunk);
+      const crown = new THREE.Group();
+      crown.position.set(pc.x, pc.y+h, pc.z);
+      for(let f=0; f<6; f++){
+        const fr = new THREE.Mesh(frondGeo, palmMatLeaf);
+        fr.rotation.y = (f/6)*Math.PI*2;
+        fr.rotation.z = 0.9 + rnd()*0.2;
+        crown.add(fr);
+      }
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.28,6,5), new THREE.MeshStandardMaterial({color: 0x8a6520}));
+      top.position.y = 0.2; crown.add(top);
+      group.add(crown);
+      state.extras.push((dt,time)=>{ crown.rotation.y = a + Math.sin(time*0.5+i)*0.08; });
+    }
+    state.extras.push((dt,time)=>{
+      oasisMesh.material.opacity = 0.88 + Math.sin(time*0.7)*0.04;
+    });
+  }
+
+  // === Hoodoos & rock arches (extra strata detail) ===
+  {
+    const hoodooMat = new THREE.MeshStandardMaterial({ color: 0xc9834e, roughness: 1, flatShading: true });
+    const hoodooMat2 = new THREE.MeshStandardMaterial({ color: 0xb97a45, roughness: 1, flatShading: true });
+    for(let i=0;i<10;i++){
+      const s = rnd()*track.L; const p = track.pointAt(s);
+      if (Math.abs(s/track.L - 0.265) < 0.04) continue; // keep puddle area clear
+      const side = rnd()>0.5?1:-1; const dist = p.width/2 + 18 + rnd()*28;
+      const base = p.pos.clone().addScaledVector(p.right, side*dist);
+      base.y = p.pos.y -0.6;
+      const h = 5 + rnd()*7;
+      const hood = new THREE.Group();
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.8, h*0.55, 6), hoodooMat2);
+      stem.position.y = h*0.28; hood.add(stem);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(1.2+ rnd()*0.6, 8,6), hoodooMat);
+      cap.scale.y = 0.55; cap.position.y = h*0.58; hood.add(cap);
+      const top = new THREE.Mesh(new THREE.ConeGeometry(0.9+ rnd()*0.5, 1.4, 6), hoodooMat);
+      top.position.y = h*0.58 + 0.8; hood.add(top);
+      hood.position.copy(base);
+      hood.rotation.y = rnd()*Math.PI;
+      group.add(hood);
+    }
+    // a natural arch near the canyon
+    if (track.canyonRange){
+      const s = (track.canyonRange[0]+track.canyonRange[1])/2;
+      const p = track.pointAt(s);
+      const side = -1; const base = p.pos.clone().addScaledVector(p.right, side*(p.width/2+34));
+      base.y = p.pos.y -1;
+      const archGroup = new THREE.Group();
+      const pillarGeo = new THREE.BoxGeometry(2.2, 14, 2.2);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xd99a5b, roughness: 1, flatShading: true });
+      const left = new THREE.Mesh(pillarGeo, mat); left.position.set(-6, 7, 0); archGroup.add(left);
+      const right = new THREE.Mesh(pillarGeo, mat); right.position.set(6,7,0); archGroup.add(right);
+      const lint = new THREE.Mesh(new THREE.BoxGeometry(15, 2.2, 3), mat); lint.position.y = 14.5; archGroup.add(lint);
+      const capMat = new THREE.MeshStandardMaterial({ color: 0xa86f3e });
+      const cap1 = new THREE.Mesh(new THREE.BoxGeometry(2.8,1,2.8), capMat); cap1.position.set(-6,14.5,0); archGroup.add(cap1);
+      const cap2 = cap1.clone(); cap2.position.set(6,14.5,0); archGroup.add(cap2);
+      archGroup.position.copy(base); archGroup.rotation.y = yawFor(p.dir);
+      group.add(archGroup);
+    }
+  }
+
+  // === Solar forge mirror array on distant mesa ===
+  {
+    const mirrorMat = new THREE.MeshStandardMaterial({ color: 0x6a7a8a, roughness: 0.25, metalness: 0.75 });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x8a6d3b, roughness: 0.6, metalness: 0.3 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffe7a0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false });
+    for(let i=0;i<6;i++){
+      const base = new THREE.Vector3(120 + i*18, 6, -260 - i*6);
+      // pedestal
+      const ped = new THREE.Mesh(new THREE.CylinderGeometry(1.2,1.6, 6,6), frameMat);
+      ped.position.copy(base); ped.position.y += 3;
+      group.add(ped);
+      // dish
+      const dish = new THREE.Mesh(new THREE.CylinderGeometry(5,5,0.6,18), mirrorMat);
+      dish.rotation.x = Math.PI/2 - 0.35;
+      dish.position.copy(base); dish.position.y += 6.2;
+      dish.rotation.y = Math.PI*0.7;
+      group.add(dish);
+      const gl = new THREE.Mesh(new THREE.CircleGeometry(4.6, 18), glowMat);
+      gl.position.copy(dish.position); gl.position.y += 0.35;
+      gl.rotation.x = -Math.PI/2 +0.35; gl.rotation.z = Math.PI*0.7;
+      group.add(gl);
+      state.extras.push((dt,time)=>{
+        const f = 0.18 + Math.sin(time*1.1+i)*0.07;
+        gl.material.opacity = f;
+      });
+    }
+  }
+
+  // === Tumbleweeds (rolling instanced) ===
+  {
+    const tumbleGeo = new THREE.SphereGeometry(0.65, 7,5);
+    const posAttr = tumbleGeo.attributes.position;
+    // add spiky displacement
+    for(let i=0;i<posAttr.count;i++){
+      const v = new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      const d = 1 + (Math.random()-0.5)*0.35;
+      v.multiplyScalar(d);
+      posAttr.setXYZ(i, v.x, v.y, v.z);
+    }
+    tumbleGeo.computeVertexNormals();
+    const tumbleMat = new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 1, flatShading: true });
+    const N_TUMBLE = 14;
+    const tumbles = new THREE.InstancedMesh(tumbleGeo, tumbleMat, N_TUMBLE);
+    const tData = [];
+    for(let i=0;i<N_TUMBLE;i++){
+      const s = rnd()*track.L; const p = track.pointAt(s);
+      const side = rnd()>0.5?1:-1; const dist = p.width/2 + 10 + rnd()*32;
+      const base = p.pos.clone().addScaledVector(p.right, side*dist);
+      base.y = 0.55;
+      tData.push({ base: base.clone(), s, a: rnd()*Math.PI*2, sp: 6 + rnd()*8, roll: rnd()*Math.PI });
+    }
+    state.tumbleweeds = { mesh: tumbles, data: tData };
+    group.add(tumbles);
+    const dummy2 = new THREE.Object3D();
+    state.extras.push((dt, time)=>{
+      for(let i=0;i<N_TUMBLE;i++){
+        const d = tData[i];
+        d.a += dt * (d.sp*0.08);
+        // drift across desert perpendicular to track
+        const p = track.pointAt(((d.s + time*d.sp)%track.L));
+        const off = Math.sin(time*0.3 + i)*6;
+        const pos = p.pos.clone().addScaledVector(p.right, (p.width/2 + 18 + (i%3)*8)* (d.base.x>p.pos.x?1:-1) + off);
+        pos.y = 0.55 + Math.abs(Math.sin(time*2 + i))*0.08;
+        dummy2.position.copy(pos);
+        dummy2.rotation.set(time* (1.2 + i*0.1), d.a, 0);
+        dummy2.scale.setScalar(0.85 + (i%3)*0.2);
+        dummy2.updateMatrix();
+        tumbles.setMatrixAt(i, dummy2.matrix);
+      }
+      tumbles.instanceMatrix.needsUpdate = true;
+    });
+  }
+
+  // === Flags & banners along track ===
+  {
+    const flagGeo = new THREE.PlaneGeometry(1.6, 1.1, 4,2);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x8a6d3b, roughness: 0.7, metalness: 0.25 });
+    const colors = [0xc8452a, 0xffb347, 0x6a9a3e];
+    for(let f=0.06; f<0.98; f+=0.14){
+      const p = track.pointAt(f*track.L);
+      if (Math.abs(f-0.265)<0.04) continue;
+      for(const side of [1,-1]){
+        if (side==-1 && Math.random()<0.4) continue;
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.09, 3.2,5), poleMat);
+        pole.position.copy(p.pos).addScaledVector(p.right, side*(p.width/2+2.6));
+        pole.position.y += 1.6;
+        group.add(pole);
+        const texCanvas = document.createElement('canvas'); texCanvas.width=64; texCanvas.height=32;
+        const ctx = texCanvas.getContext('2d'); ctx.fillStyle = '#'+colors[Math.floor(rnd()*3)].toString(16).padStart(6,'0'); ctx.fillRect(0,0,64,32);
+        ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.font='900 18px monospace'; ctx.textAlign='center'; ctx.fillText('SF',32,20);
+        const mat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(texCanvas), side: THREE.DoubleSide });
+        const flag = new THREE.Mesh(flagGeo, mat);
+        flag.position.copy(pole.position); flag.position.y += 0.9;
+        flag.position.addScaledVector(p.right, side*0.85);
+        flag.rotation.y = yawFor(p.dir) + (side>0?0:Math.PI);
+        group.add(flag);
+        flag.userData.baseY = flag.position.y; flag.userData.phase = rnd()*6;
+        state.extras.push((dt,time)=>{
+          const w = Math.sin(time*2.8 + flag.userData.phase)*0.28;
+          const arr = flag.geometry.attributes.position;
+          for(let i=0;i<arr.count;i++){
+            const x = arr.getX(i);
+            arr.setZ(i, Math.sin(x*3 + time*4 + flag.userData.phase)*0.18 );
+          }
+          arr.needsUpdate = true;
+          flag.rotation.z = w*0.5;
+        });
+      }
+    }
+  }
+
+  // === Desert flowers & additional scrub ===
+  {
+    const flowerGeo = new THREE.SphereGeometry(0.14,5,4);
+    const flowerMats = [0xff6a3c, 0xffd23f, 0xff8ae8, 0xffffff].map(c=> new THREE.MeshBasicMaterial({color:c}));
+    const stemMat = new THREE.MeshStandardMaterial({color: 0x4a7a3c});
+    for(let i=0;i<34;i++){
+      const s = rnd()*track.L; const p = track.pointAt(s);
+      const side = rnd()>0.5?1:-1; const dist = p.width/2 + 6 + rnd()*22;
+      if (Math.abs(s/track.L -0.265)<0.05 && Math.abs(dist)<12) continue;
+      const base = p.pos.clone().addScaledVector(p.right, side*dist);
+      base.y = 0.18;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.03,0.35,4), stemMat);
+      stem.position.copy(base); stem.position.y += 0.18;
+      group.add(stem);
+      const bloom = new THREE.Mesh(flowerGeo, flowerMats[Math.floor(rnd()*4)]);
+      bloom.position.copy(base); bloom.position.y += 0.38;
+      group.add(bloom);
+    }
+  }
+
+
+
+
+  // === Ambient desert animals (safe, off-track) ===
+  {
+    // Helper to place safely outside racing line: use lateral > width/2 + 12
+    const placeOutside = (progFrac, side, extraDist) => {
+      const p = track.pointAt(progFrac*track.L);
+      const dist = p.width/2 + 12 + extraDist;
+      const pos = p.pos.clone().addScaledVector(p.right, side*dist);
+      pos.y = p.pos.y;
+      return { p, pos };
+    };
+
+    // 1) Desert foxes (2) - trotting near rocks
+    const foxMat = new THREE.MeshStandardMaterial({ color: 0xc68642, roughness: 1 });
+    const foxMat2 = new THREE.MeshStandardMaterial({ color: 0xfff4d0, roughness: 1 });
+    const foxMatDark = new THREE.MeshStandardMaterial({ color: 0x4a3020, roughness: 1 });
+    for(let i=0;i<2;i++){
+      const { pos } = placeOutside(0.42 + i*0.31, i%2?1:-1, 14 + rnd()*12);
+      const fox = new THREE.Group(); fox.name='Desert fox';
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 4,8), foxMat);
+      body.rotation.z = Math.PI/2; body.position.y = 0.36; fox.add(body);
+      const head = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.35, 6), foxMat);
+      head.rotation.z = -Math.PI/2; head.position.set(0.45, 0.42, 0); fox.add(head);
+      const earGeo = new THREE.ConeGeometry(0.08,0.18,4);
+      for(const sx of [1,-1]){ const ear = new THREE.Mesh(earGeo, foxMatDark); ear.position.set(0.48, 0.55, sx*0.09); fox.add(ear); }
+      const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.5, 4,6), foxMat);
+      tail.rotation.z = Math.PI/2; tail.position.set(-0.45, 0.32, 0); fox.add(tail);
+      for(const sx of [1,-1]){
+        for(const fz of [0.18,-0.18]){
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.05,0.28,5), foxMatDark);
+          leg.position.set(fz, 0.14, sx*0.12); fox.add(leg);
+        }
+      }
+      fox.position.copy(pos); fox.position.y = 0.05;
+      group.add(fox);
+      // wandering animation: small patrol loop
+      const start = pos.clone();
+      state.animals.push({ mesh: fox, type:'fox', base: start.clone(), phase: rnd()*6, side: i%2?1:-1 });
+    }
+
+    // 2) Lizards on rocks (4) - basking, occasional tail flick
+    const lizardMat = new THREE.MeshStandardMaterial({ color: 0x7a9a58, roughness: 0.9 });
+    for(let i=0;i<4;i++){
+      const { pos } = placeOutside(0.18 + i*0.19, 1, 9 + rnd()*10);
+      const lizard = new THREE.Group(); lizard.name='Basking lizard';
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.45,4,6), lizardMat);
+      body.rotation.z = Math.PI/2; body.position.y = 0.11; lizard.add(body);
+      const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.38,4,6), lizardMat);
+      tail.rotation.z = Math.PI/2; tail.position.set(-0.32, 0.09, 0); lizard.add(tail);
+      tail.name='tail';
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.09,6,5), lizardMat);
+      head.position.set(0.26,0.13,0); lizard.add(head);
+      lizard.position.copy(pos); lizard.position.y = 0.02;
+      group.add(lizard);
+      state.animals.push({ mesh: lizard, type:'lizard', base: pos.clone(), phase: rnd()*6 });
+    }
+
+    // 3) Hares (2) - hopping near scrub
+    const hareMat = new THREE.MeshStandardMaterial({ color: 0xd8c2a6, roughness: 1 });
+    const hareEarMat = new THREE.MeshStandardMaterial({ color: 0x6a9a8a, roughness: 1 });
+    for(let i=0;i<2;i++){
+      const { pos } = placeOutside(0.55 + i*0.22, -1, 16 + rnd()*10);
+      const hare = new THREE.Group(); hare.name='Desert hare';
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.45,4,6), hareMat);
+      body.rotation.z = Math.PI/2; body.position.y=0.26; hare.add(body);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.16,7,5), hareMat);
+      head.position.set(0.26,0.34,0); hare.add(head);
+      for(const sx of [1,-1]){ const ear = new THREE.Mesh(new THREE.CapsuleGeometry(0.04,0.32,4,6), hareEarMat); ear.position.set(0.28,0.48, sx*0.06); hare.add(ear); }
+      hare.position.copy(pos); hare.position.y=0.02;
+      group.add(hare);
+      state.animals.push({ mesh: hare, type:'hare', base: pos.clone(), phase: rnd()*6, hopT: rnd()*2 });
+    }
+
+    // 4) Camel caravan far distance (moving slowly around horizon)
+    {
+      const camelMat = new THREE.MeshStandardMaterial({ color: 0xc9a46a, roughness: 1 });
+      const caravan = new THREE.Group(); caravan.name='Camel caravan';
+      for(let c=0;c<3;c++){
+        const camel = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.55,0.32), camelMat); body.position.y=0.85; camel.add(body);
+        const hump = new THREE.Mesh(new THREE.SphereGeometry(0.26,6,5), camelMat); hump.position.set(0,1.12,0); hump.scale.y=0.7; camel.add(hump);
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.12,0.6,5), camelMat); neck.position.set(0.4,1.15,0); neck.rotation.z=-0.6; camel.add(neck);
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.22,0.2), camelMat); head.position.set(0.58,1.42,0); camel.add(head);
+        for(const sx of [1,-1]){
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.72,5), camelMat); leg.position.set(0.32,0.36, sx*0.12); camel.add(leg);
+          const leg2 = leg.clone(); leg2.position.set(-0.32,0.36, sx*0.12); camel.add(leg2);
+        }
+        camel.position.set(c*3.2,0,0);
+        caravan.add(camel);
+      }
+      caravan.position.set(260, 0, 80);
+      group.add(caravan);
+      state.animals.push({ mesh: caravan, type:'caravan', base: new THREE.Vector3(260,0,80), phase: 0 });
+    }
+
+    // generic animal animation loop
+    state.extras.push((dt, time)=>{
+      for(const a of state.animals){
+        if (a.type==='fox'){
+          const off = Math.sin(time*0.6 + a.phase)*1.8;
+          a.mesh.position.x = a.base.x + off * (a.side*0.3);
+          a.mesh.position.z = a.base.z + Math.cos(time*0.5 + a.phase)*1.2;
+          a.mesh.rotation.y = Math.sin(time*0.6 + a.phase)*0.6;
+          a.mesh.position.y = 0.05 + Math.abs(Math.sin(time*3 + a.phase))*0.04;
+        } else if (a.type==='lizard'){
+          const tail = a.mesh.getObjectByName('tail');
+          if (tail) tail.rotation.y = Math.sin(time*2.5 + a.phase)*0.35;
+          a.mesh.rotation.y = Math.sin(time*0.3 + a.phase)*0.2;
+        } else if (a.type==='hare'){
+          a.hopT += dt*2.2;
+          const hop = Math.max(0, Math.sin(a.hopT))*0.18;
+          a.mesh.position.y = 0.02 + hop;
+          a.mesh.rotation.y = Math.sin(time*0.4 + a.phase)*0.4;
+          if (hop>0.01) a.mesh.position.x = a.base.x + Math.sin(a.hopT*0.6)*0.4;
+        } else if (a.type==='caravan'){
+          const t = time*0.018;
+          const r = 520;
+          a.mesh.position.set(Math.cos(t)*r, 0, Math.sin(t)*r);
+          a.mesh.rotation.y = -t + Math.PI/2;
+          // gentle bob
+          a.mesh.position.y = Math.sin(time*0.8 + a.phase)*0.12;
+        }
+      }
+    });
+  }
+
+  // === Dust devils (rotating sand columns, distant) ===
+  {
+    const devilMat = new THREE.MeshBasicMaterial({ color: 0xe8c088, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide });
+    const devils = [];
+    for(let i=0;i<3;i++){
+      const h = 14 + rnd()*12;
+      const devil = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.2, h, 7, 1, true), devilMat.clone());
+      devil.position.set( (rnd()-0.5)*420, h/2, (rnd()-0.5)*420 );
+      // keep away from road
+      const chk = track.surface(devil.position, {main:-1, sc:-1});
+      if (Math.abs(chk.lateral) < chk.width/2 + 20){ i--; continue; }
+      group.add(devil);
+      devils.push({ mesh: devil, y0: h/2, phase: rnd()*6, speed: 0.6 + rnd()*0.7 });
+    }
+    state.extras.push((dt, time)=>{
+      for(const d of devils){
+        d.mesh.rotation.y += dt * d.speed;
+        d.mesh.position.y = d.y0 + Math.sin(time*0.5 + d.phase)*0.8;
+        d.mesh.material.opacity = 0.14 + Math.sin(time*0.9 + d.phase)*0.05;
+      }
+    });
+  }
+
 
   // ------------------------------------------------- ancient gear monuments
   function gearMonument(x, y, z, radius) {

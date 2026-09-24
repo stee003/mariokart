@@ -129,10 +129,16 @@ export const CONFIG = {
 
   recovery: {
     offTrackLimit: 2.4,          // seconds off-road before auto reset
-    hardLimitLateral: 9.0,       // meters beyond road edge => instant reset
+    hardLimitLateral: 9.0,       // meters beyond road edge => delayed reset
     resetDelay: 0.85,            // freeze time after a reset
     stuckSpeed: 1.2,
     stuckTime: 3.0,
+    // Elevated-section handling: leaving the playable surface or falling
+    // off a raised deck now queues the same reset a manual R press does,
+    // after a short, readable pause instead of snapping mid-air.
+    fallHeight: 4.5,             // metres below the road surface that counts as a fall
+    elevatedDelay: 0.75,         // seconds to wait before respawning off a raised edge
+    hardOffDelay: 0.85,          // seconds to wait before respawning far outside the road
   },
 
   ai: {
