@@ -295,6 +295,10 @@ export class OnlineClient {
     this._send({ type: 'startRace' });
   }
 
+  raceReady() {
+    return this._send({ type: 'raceReady' });
+  }
+
   sendChat(message) {
     this._send({ type: 'chat', message });
   }

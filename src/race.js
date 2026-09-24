@@ -91,6 +91,11 @@ export class RaceManager {
     const racing2 = this.state === 'racing' || this.state === 'finished';
     const order = this.itemsEnabled ? this.positions() : null;
     for (const kart of this.karts) {
+      // Network-owned karts are advanced by authoritative snapshots.  Calling
+      // the offline AI/physics path here used to dereference kart.ai (null for
+      // remote racers) on the first racing frame, terminating the animation
+      // loop and making multiplayer appear completely frozen.
+      if (kart.remote) continue;
       if (order) {
         kart._racePos = order.indexOf(kart) + 1;
         kart._raceTotal = this.karts.length;
