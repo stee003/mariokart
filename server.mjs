@@ -255,6 +255,8 @@ class Lobby {
       p.finished = false;
       p.finishTime = null;
       p.progress = 0;
+      p.raceReady = false;
+      p.hasPose = false;
     }
     return true;
   }
@@ -262,6 +264,11 @@ class Lobby {
   update(dt) {
     this.tick++;
     if (this.state === 'countdown') {
+      // Loading a track is asynchronous and can vary greatly between clients.
+      // Do not consume the countdown until every connected racer has built its
+      // track, kart and physics state and explicitly acknowledged readiness.
+      const connected = [...this.players.values()].filter(p => p.connected);
+      if (!connected.length || connected.some(p => !p.raceReady)) return;
       this.countdown -= dt;
       if (this.countdown <= 0) {
         this.state = 'racing';
@@ -332,6 +339,8 @@ class Lobby {
         // we don't reject, just clamp
       }
       p.x = nx; p.z = nz;
+      p.hasPose = true;
+      p.lastUpdate = now();
       if (Number.isFinite(yaw)) p.yaw = yaw;
       if (Number.isFinite(speed)) p.speed = Math.min(60, Math.max(0, speed));
       p.progress = progress;
@@ -680,11 +689,21 @@ function handleWsMessage(conn, msg) {
       broadcastLobby(lobby.id, { type: 'countdown', value: lobby.countdown, lobby: lobby.fullInfo() }, null);
       break;
     }
+    case 'raceReady': {
+      const lobby = getLobby(conn.lobbyId);
+      const p = lobby?.getPlayer(conn.playerId);
+      if (!p || lobby.state !== 'countdown') return;
+      // The acknowledgement is scoped to this countdown; startCountdown
+      // resets it, preventing stale readiness from a previous race.
+      p.raceReady = true;
+      broadcastLobby(lobby.id, { type: 'raceReadyUpdate', playerId: p.id }, null);
+      break;
+    }
     case 'input': {
       const lobby = getLobby(conn.lobbyId);
       if (!lobby) return;
       // msg contains pos, input, lap, checkpoint, etc
-      const result = lobby.applyPlayerUpdate(conn.playerId, msg);
+      lobby.applyPlayerUpdate(conn.playerId, msg);
       // we don't broadcast input individually; snapshot will include
       break;
     }
@@ -816,7 +835,7 @@ setInterval(() => {
           x: p.x, z: p.z, yaw: p.yaw, speed: p.speed,
           lap: p.lap, checkpoint: p.checkpoint, progress: p.progress,
           finished: p.finished, finishTime: p.finishTime,
-          connected: p.connected,
+          connected: p.connected, raceReady: !!p.raceReady, hasPose: !!p.hasPose,
         })),
         standings: lobby.computeStandings(),
       };

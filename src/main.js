@@ -1360,10 +1360,19 @@ class Game {
         const statusEl = document.getElementById('online-lobby-status');
         if (statusEl) statusEl.textContent = this.i18n.t('online.countdown', { n: Math.ceil(this.onlineCountdown) });
         this.hud.countdown(String(Math.ceil(this.onlineCountdown)));
+        // Build the world during the server's readiness barrier, not after the
+        // countdown has elapsed. Every client acknowledges only after its
+        // track, grid and physics objects are ready.
+        this._onlineBeginRace(payload.lobby || this.onlineLobby);
       }
-      if (payload.lobby) this._renderOnlineLobby(payload.lobby);
     } else if (type === 'raceStart') {
-      this._onlineBeginRace(payload.lobby || this.onlineLobby);
+      if (this.appState !== 'race' || this.mode !== 'online') {
+        this._onlineBeginRace(payload.lobby || this.onlineLobby);
+      } else {
+        this.onlineRaceState = 'racing';
+        this.race.state = 'racing';
+        this.race.countdownT = 0;
+      }
     } else if (type === 'raceFinished') {
       this._onOnlineRaceFinished(payload);
     } else if (type === 'playerJoined' || type === 'playerLeft' || type === 'playerDisconnected') {
@@ -1481,6 +1490,10 @@ class Game {
     this._onlineFinishedShown = false;
     this._onlineLastCount = null;
     this._onlineLocalFinishedSent = false;
+
+    // This is deliberately last: once sent, the server may immediately begin
+    // consuming the synchronized countdown and publishing racing snapshots.
+    this.onlineClient?.raceReady();
   }
 
   _onOnlineSnapshot(snap) {
@@ -1488,6 +1501,18 @@ class Game {
     this.onlineRaceState = snap.state;
     this.onlineRaceTime = snap.raceTime;
     this.onlineCountdown = snap.countdown;
+
+    // The server owns the phase clock. Keep local input/physics gating on the
+    // same phase instead of starting a second independent 3.5 second timer.
+    if (this.appState === 'race') {
+      if (snap.state === 'countdown') {
+        this.race.state = 'countdown';
+        this.race.countdownT = Math.max(0, Number(snap.countdown) || 0);
+      } else if (snap.state === 'racing' && this.race.state === 'countdown') {
+        this.race.state = 'racing';
+        this.race.countdownT = 0;
+      }
+    }
 
     if (this.appState !== 'race') {
       if (snap.lobby) this._renderOnlineLobby(snap.lobby);
@@ -1520,9 +1545,14 @@ class Game {
           this.onlineRemoteKarts.set(p.id, { kart, vehicle: veh, visual: vis, lastPos: p });
         } else {
           remote.lastPos = p;
-          remote.vehicle.pos.set(p.x, remote.vehicle.pos.y, p.z);
-          remote.vehicle.yaw = p.yaw;
-          remote.vehicle.fSpeed = p.speed || 0;
+          // Until a peer publishes its first pose, retain the deterministic
+          // start-grid placement instead of snapping every remote kart to the
+          // server object's default origin (0, 0).
+          if (p.hasPose && Number.isFinite(p.x) && Number.isFinite(p.z)) {
+            remote.vehicle.pos.set(p.x, remote.vehicle.pos.y, p.z);
+            if (Number.isFinite(p.yaw)) remote.vehicle.yaw = p.yaw;
+            remote.vehicle.fSpeed = Number.isFinite(p.speed) ? p.speed : 0;
+          }
           const st = this.race.kartState.get(remote.vehicle);
           if (st) {
             st.lap = p.lap || 0;
