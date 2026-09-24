@@ -3,12 +3,16 @@
 // remote kart interpolation, and race sync.
 // ===========================================================================
 
+import { SnapshotInterpolator, NET_SNAPSHOT } from './netSnapshots.js';
+
 export const ONLINE_CONFIG = {
   // WebSocket endpoint - same host, /ws
   wsPath: '/ws',
-  // Polling fallback
-  pollInterval: 100, // ms for input send
-  snapshotInterpDelay: 100, // ms behind server to smooth
+  // Local state is published at the server tick rate (20 Hz). At the old
+  // 100 ms it took up to two server ticks for a peer to learn you had moved,
+  // which read as lag and rubber-banding on every other screen.
+  pollInterval: 50,
+  snapshotInterpDelay: NET_SNAPSHOT.interpDelayMs, // ms behind server to smooth
   maxChatHistory: 100,
 };
 
@@ -31,16 +35,26 @@ export class OnlineClient {
     this.playerName = 'Player';
     this.color = randomColor();
     this.status = 'disconnected'; // disconnected | connecting | lobby | countdown | racing | finished
-    this.serverUrl = null; // for http fallback
-    this._snapshotBuffer = []; // for interpolation
+    this.serverUrl = null; // explicit ws:// endpoint (tests / dedicated server)
+    // Snapshots land on a server timeline and are replayed slightly in the
+    // past, so peers always have two states to glide between.
+    this.interpolator = new SnapshotInterpolator({ interpDelayMs: ONLINE_CONFIG.snapshotInterpDelay });
     this._lastInputSend = 0;
+    this._inputSeq = 0;
+    this._pendingInput = null;
     this._reconnectAttempts = 0;
+    this.lastSnapshot = null;
+    this.snapshotsReceived = 0;
   }
 
   get wsUrl() {
+    if (this.serverUrl) return this.serverUrl;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.host}${ONLINE_CONFIG.wsPath}`;
   }
+
+  // Back-compat view of the interpolation buffer (used by diagnostics/tests).
+  get _snapshotBuffer() { return this.interpolator.snapshots; }
 
   connect() {
     return new Promise((resolve, reject) => {
@@ -164,10 +178,11 @@ export class OnlineClient {
         break;
       }
       case 'snapshot': {
-        // buffer for interpolation
-        this._snapshotBuffer.push({ ...msg, receivedAt: performance.now() });
-        // keep only last 20
-        if (this._snapshotBuffer.length > 20) this._snapshotBuffer.shift();
+        // Buffered on the server timeline; late/duplicate frames are dropped
+        // by the interpolator instead of rewinding every peer.
+        this.interpolator.push(msg);
+        this.lastSnapshot = msg;
+        this.snapshotsReceived++;
         this.lobby = msg.lobby || this.lobby;
         if (msg.state) this.status = msg.state;
         this.onSnapshot(msg);
@@ -311,12 +326,10 @@ export class OnlineClient {
     this._send({ type: 'returnToLobby' });
   }
 
-  // send local player input + position
-  sendInput({ input, pos, lap, checkpoint, progress, finished }) {
-    const now = performance.now();
-    if (now - this._lastInputSend < ONLINE_CONFIG.pollInterval) return;
-    this._lastInputSend = now;
-    this._send({
+  // Publish the local kart: pose + movement state + race progress.
+  // `force` bypasses the rate limit for one-off transitions (finish, respawn).
+  sendInput({ input, pos, motion, lap, checkpoint, progress, finished, force = false } = {}) {
+    const payload = {
       type: 'input',
       input,
       x: pos?.x,
@@ -324,11 +337,45 @@ export class OnlineClient {
       z: pos?.z,
       yaw: pos?.yaw,
       speed: pos?.speed,
+      // Movement state travels with the pose so peers animate correctly:
+      // steering, drift charge, boost flames and airtime all replicate.
+      steer: motion?.steer ?? input?.steer ?? 0,
+      throttle: motion?.throttle ?? input?.throttle ?? 0,
+      brake: motion?.brake ?? input?.brake ?? 0,
+      drift: !!(motion?.drift ?? input?.drift),
+      driftLevel: motion?.driftLevel ?? 0,
+      boost: !!motion?.boost,
+      boostLevel: motion?.boostLevel ?? 0,
+      airborne: !!motion?.airborne,
       lap,
       checkpoint,
       progress,
       finished,
-    });
+    };
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (!force && now - this._lastInputSend < ONLINE_CONFIG.pollInterval) {
+      // Keep the freshest sample around: whatever happens, the last state of
+      // the frame is what the next send publishes (no dropped stops).
+      this._pendingInput = payload;
+      return false;
+    }
+    this._lastInputSend = now;
+    this._pendingInput = null;
+    payload.seq = ++this._inputSeq;
+    return this._send(payload);
+  }
+
+  // Flush a coalesced sample (safe to call every frame).
+  flushInput() {
+    if (!this._pendingInput) return false;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - this._lastInputSend < ONLINE_CONFIG.pollInterval) return false;
+    const payload = this._pendingInput;
+    this._pendingInput = null;
+    this._lastInputSend = now;
+    payload.seq = ++this._inputSeq;
+    return this._send(payload);
   }
 
   sendFinish() {
@@ -357,98 +404,107 @@ export class OnlineClient {
     };
   }
 
-  // interpolation helper: get interpolated remote players at render time
-  getInterpolatedPlayers() {
-    if (this._snapshotBuffer.length === 0) return null;
-    const now = performance.now();
-    const targetTime = now - ONLINE_CONFIG.snapshotInterpDelay;
+  // -------------------------------------------------------- snapshot access
+  // Interpolated world view for this render instant. Remote karts are drawn
+  // ~1 snapshot in the past so there are always two states to blend between;
+  // if the next snapshot is late they coast forwards briefly instead of
+  // freezing. Returns null until the first snapshot arrives.
+  sampleRemoteStates(localNow) {
+    return this.interpolator.sample(localNow);
+  }
 
-    // find two snapshots around targetTime
-    let before = null, after = null;
-    for (let i = 0; i < this._snapshotBuffer.length; i++) {
-      const s = this._snapshotBuffer[i];
-      if (s.receivedAt <= targetTime) before = s;
-      if (s.receivedAt > targetTime) { after = s; break; }
-    }
-    if (!before) before = this._snapshotBuffer[0];
-    if (!after) return before; // no interpolation
+  // Legacy alias kept for callers that expect the old shape.
+  getInterpolatedPlayers(localNow) {
+    return this.interpolator.sample(localNow);
+  }
 
-    const dt = after.receivedAt - before.receivedAt;
-    if (dt <= 0) return before;
-    const t = Math.max(0, Math.min(1, (targetTime - before.receivedAt) / dt));
+  // Interpolated state of a single peer.
+  remotePlayerState(id, localNow) {
+    return this.interpolator.playerState(id, localNow);
+  }
 
-    // interpolate each player present in both
-    const beforeMap = new Map(before.players.map(p => [p.id, p]));
-    const afterMap = new Map(after.players.map(p => [p.id, p]));
+  // Newest authoritative roster (membership, laps, readiness).
+  get players() {
+    return this.lastSnapshot?.players || this.lobby?.players || [];
+  }
 
-    const interp = [];
-    for (const [id, b] of beforeMap) {
-      const a = afterMap.get(id);
-      if (!a) { interp.push(b); continue; }
-      // lerp position, yaw with angle wrap
-      const lerp = (x, y) => x + (y - x) * t;
-      let yawDiff = a.yaw - b.yaw;
-      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
-      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-      interp.push({
-        ...b,
-        x: lerp(b.x, a.x),
-        z: lerp(b.z, a.z),
-        yaw: b.yaw + yawDiff * t,
-        speed: lerp(b.speed || 0, a.speed || 0),
-        lap: a.lap, // lap not interpolated
-        checkpoint: a.checkpoint,
-        finished: a.finished,
-        progress: lerp(b.progress || 0, a.progress || 0),
-      });
-    }
-    return {
-      ...before,
-      players: interp,
-      standings: after.standings || before.standings,
-      state: after.state,
-      raceTime: before.raceTime + (after.raceTime - before.raceTime) * t,
-      countdown: before.countdown,
-    };
+  netStats(localNow) {
+    return { ...this.interpolator.stats(localNow), sent: this._inputSeq, snapshots: this.snapshotsReceived };
+  }
+
+  resetInterpolation() {
+    this.interpolator.reset();
+    this.lastSnapshot = null;
   }
 }
 
 // ------------------------------------------------------------------ remote kart visual interpolation
+// Lightweight pose follower for renderers that do not own a full
+// VehicleController (minimap blips, spectator views, tests). The in-game karts
+// are driven by RemotePlayerSync, which applies the same smoothing to real
+// vehicles.
 export class RemoteKart {
-  constructor(playerInfo) {
+  constructor(playerInfo = {}) {
     this.id = playerInfo.id;
     this.name = playerInfo.name;
     this.color = playerInfo.color;
     this.x = playerInfo.x || 0;
+    this.y = playerInfo.y || 0;
     this.z = playerInfo.z || 0;
     this.yaw = playerInfo.yaw || 0;
     this.speed = 0;
     this.targetX = this.x;
+    this.targetY = this.y;
     this.targetZ = this.z;
     this.targetYaw = this.yaw;
     this.lap = 0;
     this.checkpoint = -1;
     this.finished = false;
-    this.smoothing = 0.15;
+    this.drift = false;
+    this.driftLevel = 0;
+    this.boost = false;
+    this.airborne = false;
+    this.hasPose = false;
+    // exponential convergence rates (1/s)
+    this.posRate = 22;
+    this.yawRate = 20;
+    this.snapDistance = 9;
   }
 
   updateFromSnapshot(p) {
-    this.targetX = p.x;
-    this.targetZ = p.z;
-    this.targetYaw = p.yaw;
-    this.speed = p.speed;
-    this.lap = p.lap;
-    this.checkpoint = p.checkpoint;
-    this.finished = p.finished;
+    if (!p) return;
+    if (Number.isFinite(p.x)) this.targetX = p.x;
+    if (Number.isFinite(p.y)) this.targetY = p.y;
+    if (Number.isFinite(p.z)) this.targetZ = p.z;
+    if (Number.isFinite(p.yaw)) this.targetYaw = p.yaw;
+    this.speed = Number.isFinite(p.speed) ? p.speed : this.speed;
+    this.lap = p.lap ?? this.lap;
+    this.checkpoint = p.checkpoint ?? this.checkpoint;
+    this.finished = !!p.finished;
+    this.drift = !!p.drift;
+    this.driftLevel = p.driftLevel || 0;
+    this.boost = !!p.boost;
+    this.airborne = !!p.airborne;
+    if (!this.hasPose && (p.hasPose ?? true)) {
+      // first authoritative pose: adopt it instead of sliding in from the origin
+      this.x = this.targetX; this.y = this.targetY; this.z = this.targetZ; this.yaw = this.targetYaw;
+      this.hasPose = true;
+    }
   }
 
-  // simple lerp each frame
+  // Frame-rate independent easing towards the last interpolated target.
   step(dt) {
-    this.x += (this.targetX - this.x) * Math.min(1, dt * 10);
-    this.z += (this.targetZ - this.z) * Math.min(1, dt * 10);
+    const dx = this.targetX - this.x;
+    const dz = this.targetZ - this.z;
+    const far = Math.hypot(dx, dz) > this.snapDistance;
+    const kPos = far ? 1 : 1 - Math.exp(-this.posRate * Math.max(0, dt));
+    const kYaw = far ? 1 : 1 - Math.exp(-this.yawRate * Math.max(0, dt));
+    this.x += dx * kPos;
+    this.z += dz * kPos;
+    this.y += (this.targetY - this.y) * kPos;
     let diff = this.targetYaw - this.yaw;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    this.yaw += diff * Math.min(1, dt * 8);
+    this.yaw += diff * kYaw;
   }
 }

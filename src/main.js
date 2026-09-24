@@ -52,9 +52,12 @@ import { CHASSIS } from './content/chassis.js';
 import { WHEELS } from './content/wheels.js';
 import { PAINTS } from './content/cosmetics.js';
 import { OnlineClient } from './onlineMultiplayer.js';
+import { RemotePlayerSync } from './remotePlayers.js';
 import { GAMEPLAY_ASPECT, fitAspectViewport, detectMobileDevice } from './mobile.js';
 
 const FIXED_DT = 1 / 60;
+// Neutral controls, published while an online race is paused locally.
+const IDLE_INPUT = Object.freeze({ throttle: 0, brake: 0, steer: 0, drift: false, trick: false, item: false });
 
 // Developer tools (FPS overlay + verbose logging) stay OFF unless ?debug=1
 // is present in the URL - release builds never show them.
@@ -92,6 +95,8 @@ class Game {
     this.onlineLobby = null;
     this.onlinePlayerId = null;
     this.onlineRemoteKarts = new Map();
+    this.remoteSync = null;          // RemotePlayerSync (peer karts + interpolation)
+    this._onlineRosterSig = null;
     this.onlineRaceState = 'idle';
     this.onlineCountdown = 0;
     this.onlineRaceTime = 0;
@@ -1202,9 +1207,10 @@ class Game {
   _onlineLeaveLobby() {
     const client = this.onlineClient;
     if (client) client.leaveLobby();
+    client?.resetInterpolation();
     this.onlineLobby = null;
     this.onlinePlayerId = null;
-    this.onlineRemoteKarts.clear();
+    this._onlineClearRemotes();
     this.hud.showScreen('screen-online');
     this._onlineRefreshLobbies();
   }
@@ -1401,6 +1407,99 @@ class Game {
     this.startOnlineRace();
   }
 
+  // Peer lifecycle is owned by RemotePlayerSync: it builds a kart when a
+  // player appears in the authoritative roster, tears it down when they leave,
+  // and drives every surviving peer from interpolated snapshots.
+  _ensureRemoteSync() {
+    if (this.remoteSync) {
+      this.remoteSync.setTrack(this.track);
+      this.remoteSync.setLocalId(this.onlinePlayerId);
+      return this.remoteSync;
+    }
+    this.remoteSync = new RemotePlayerSync({
+      track: this.track,
+      localId: this.onlinePlayerId,
+      createEntry: (p) => this._createRemoteKart(p),
+      disposeEntry: (entry) => this._disposeRemoteKart(entry),
+    });
+    return this.remoteSync;
+  }
+
+  _createRemoteKart(p) {
+    const veh = new VehicleController(this.track, false);
+    const col = p.color || 0xffaa00;
+    const vis = buildKart(col, 0xffffff, 0xcccccc);
+    this.scene.add(vis.group);
+    this.scene.add(vis.shadow);
+    this.kartVisuals.set(veh, vis);
+    const kart = {
+      vehicle: veh,
+      ai: null,
+      nameKey: p.name,
+      isPlayer: false,
+      charVis: vis.charVis || null,
+      minimapColor: col,
+      playerId: p.id,
+      playerName: p.name,
+      remote: true,
+    };
+    this.race.registerKart(kart);
+    // Peers start on their authoritative grid slot, so the world looks right
+    // before their first pose packet arrives.
+    const slot = this._onlineGridSlot(p);
+    if (slot) veh.place(slot);
+    const entry = { kart, vehicle: veh, visual: vis, lastPos: null };
+    this.onlineRemoteKarts.set(p.id, entry);
+    return entry;
+  }
+
+  _disposeRemoteKart(entry) {
+    if (!entry) return;
+    const { kart, vehicle, visual } = entry;
+    if (visual) {
+      this.scene.remove(visual.group);
+      this.scene.remove(visual.shadow);
+      disposeTree(visual.group);
+      disposeTree(visual.shadow);
+    }
+    this.kartVisuals.delete(vehicle);
+    this.race.kartState.delete(vehicle);
+    const idx = this.race.karts.indexOf(kart);
+    if (idx >= 0) this.race.karts.splice(idx, 1);
+    this.onlineRemoteKarts.delete(kart?.playerId ?? entry.id);
+  }
+
+  // Start grid slot for a networked player. The server hands out the slot
+  // index so every client agrees on who starts where.
+  _onlineGridSlot(p, total = null) {
+    const players = this.onlineLobby?.players || [];
+    const count = total ?? Math.max(1, players.length || 1);
+    const grid = this.track.startGrid(count);
+    let idx = Number.isFinite(p?.slot) ? p.slot : players.findIndex(pl => pl.id === p?.id);
+    if (!Number.isFinite(idx) || idx < 0) idx = 0;
+    return grid[Math.min(grid.length - 1, idx)];
+  }
+
+  // Re-place every kart on its authoritative slot. RaceManager.start() places
+  // karts by registration order, which differs per client (each client
+  // registers itself first), so the grid has to be rebuilt from server slots.
+  _placeOnlineGrid() {
+    const players = this.onlineLobby?.players || [];
+    if (!players.length) return;
+    const grid = this.track.startGrid(players.length);
+    players.forEach((p, i) => {
+      const idx = Number.isFinite(p.slot) ? Math.min(grid.length - 1, Math.max(0, p.slot)) : i;
+      const slot = grid[idx];
+      if (!slot) return;
+      const vehicle = p.id === this.onlinePlayerId
+        ? this.playerKart?.vehicle
+        : this.onlineRemoteKarts.get(p.id)?.vehicle;
+      vehicle?.place(slot);
+    });
+    for (const entry of this.onlineRemoteKarts.values()) entry.hasPose = false;
+    for (const entry of this.remoteSync?.values() || []) entry.hasPose = false;
+  }
+
   _setupOnlineRaceKarts(lobby) {
     const players = lobby.players || [];
     const localId = this.onlinePlayerId;
@@ -1416,6 +1515,8 @@ class Game {
     this.race.karts = [];
     this.race.kartState.clear();
     this.onlineRemoteKarts.clear();
+    this.remoteSync = null;
+    this.onlineClient?.resetInterpolation();
 
     const loadout = buildLoadout(this.save.get('loadout', {}));
     const localPlayerInfo = players.find(p=>p.id===localId);
@@ -1438,30 +1539,8 @@ class Game {
     this.race.registerKart(localKart);
     this.playerKart = localKart;
 
-    for (const p of players) {
-      if (p.id === localId) continue;
-      const veh = new VehicleController(this.track, false);
-      const col = p.color || 0xffaa00;
-      const vis = buildKart(col, 0xffffff, 0xcccccc);
-      this.scene.add(vis.group);
-      this.scene.add(vis.shadow);
-      this.kartVisuals.set(veh, vis);
-      const kart = {
-        vehicle: veh,
-        ai: null,
-        nameKey: p.name,
-        isPlayer: false,
-        charVis: vis.charVis || null,
-        minimapColor: col,
-        playerId: p.id,
-        playerName: p.name,
-        remote: true,
-      };
-      this.race.registerKart(kart);
-      this.onlineRemoteKarts.set(p.id, { kart, vehicle: veh, visual: vis, lastPos: null });
-    }
-
-    this._placeOnGrid();
+    this._ensureRemoteSync().syncRoster(players);
+    this._placeOnlineGrid();
   }
 
   startOnlineRace() {
@@ -1474,6 +1553,9 @@ class Game {
     this.race.lapsOverride = this.onlineLobby?.laps || 3;
     this.race.itemsEnabled = false;
     this.race.restart();
+    // restart() lines karts up by registration order; the server's slots are
+    // the only ordering every client shares.
+    this._placeOnlineGrid();
     this.hud.setItem(null);
     for (const m of this.itemVisuals.boxMeshes) m.visible = false;
     this.camCtl.snapTo(this.playerKart.vehicle);
@@ -1514,51 +1596,31 @@ class Game {
       }
     }
 
+    // The roster in a snapshot is authoritative: it is what tells this client
+    // that somebody joined, left or dropped out - in the lobby as well as on
+    // track.
+    if (Array.isArray(snap.players)) this._onlineUpdateRoster(snap.players);
+
     if (this.appState !== 'race') {
       if (snap.lobby) this._renderOnlineLobby(snap.lobby);
       return;
     }
 
-    if (snap.players) {
+    // Poses are NOT applied here. A snapshot lands 20 times per second, so
+    // writing straight into the karts would move them in visible jumps.
+    // frame() samples the interpolated timeline every physics step instead;
+    // only discrete race progress is copied across now.
+    if (Array.isArray(snap.players)) {
       for (const p of snap.players) {
         if (p.id === this.onlinePlayerId) continue;
         const remote = this.onlineRemoteKarts.get(p.id);
-        if (!remote) {
-          const veh = new VehicleController(this.track, false);
-          const col = p.color || 0xffaa00;
-          const vis = buildKart(col, 0xffffff, 0xcccccc);
-          this.scene.add(vis.group);
-          this.scene.add(vis.shadow);
-          this.kartVisuals.set(veh, vis);
-          const kart = {
-            vehicle: veh,
-            ai: null,
-            nameKey: p.name,
-            isPlayer: false,
-            charVis: vis.charVis || null,
-            minimapColor: col,
-            playerId: p.id,
-            playerName: p.name,
-            remote: true,
-          };
-          this.race.registerKart(kart);
-          this.onlineRemoteKarts.set(p.id, { kart, vehicle: veh, visual: vis, lastPos: p });
-        } else {
-          remote.lastPos = p;
-          // Until a peer publishes its first pose, retain the deterministic
-          // start-grid placement instead of snapping every remote kart to the
-          // server object's default origin (0, 0).
-          if (p.hasPose && Number.isFinite(p.x) && Number.isFinite(p.z)) {
-            remote.vehicle.pos.set(p.x, remote.vehicle.pos.y, p.z);
-            if (Number.isFinite(p.yaw)) remote.vehicle.yaw = p.yaw;
-            remote.vehicle.fSpeed = Number.isFinite(p.speed) ? p.speed : 0;
-          }
-          const st = this.race.kartState.get(remote.vehicle);
-          if (st) {
-            st.lap = p.lap || 0;
-            st.finished = !!p.finished;
-            if (p.finished) st.finishTime = p.finishTime;
-          }
+        if (!remote) continue;
+        remote.lastPos = p;
+        const st = this.race.kartState.get(remote.vehicle);
+        if (st) {
+          st.lap = p.lap || 0;
+          st.finished = !!p.finished;
+          if (p.finished) st.finishTime = p.finishTime;
         }
       }
     }
@@ -1577,6 +1639,82 @@ class Game {
         this.music.setState('racing');
       }
       this._onlineLastCount = -1;
+    }
+  }
+
+  // ------------------------------------------------------- peer replication
+  // Keep the local world in step with the authoritative roster: build karts
+  // for players who appeared, drop karts for players who left, and refresh the
+  // lobby panel when the roster actually changed.
+  _onlineUpdateRoster(players) {
+    if (!Array.isArray(players) || !players.length) return;
+    if (this.onlineLobby) {
+      // Merge the live roster into the cached lobby so slots, readiness and
+      // connection state stay current between lobbyUpdate messages.
+      const byId = new Map(players.map(p => [p.id, p]));
+      this.onlineLobby.players = (this.onlineLobby.players || []).map(p => ({ ...p, ...(byId.get(p.id) || {}) }));
+      for (const p of players) {
+        if (!this.onlineLobby.players.some(existing => existing.id === p.id)) {
+          this.onlineLobby.players.push({ ...p });
+        }
+      }
+      this.onlineLobby.players = this.onlineLobby.players.filter(p => byId.has(p.id));
+      this.onlineLobby.playerCount = this.onlineLobby.players.length;
+    }
+
+    const signature = players
+      .map(p => `${p.id}:${p.ready ? 1 : 0}${p.isHost ? 'h' : ''}${p.connected ? 'c' : ''}`)
+      .join('|');
+    if (signature !== this._onlineRosterSig) {
+      this._onlineRosterSig = signature;
+      if (this.appState !== 'race' && this.onlineLobby) this._renderOnlineLobby(this.onlineLobby);
+    }
+
+    if (this.appState !== 'race' || this.mode !== 'online' || !this.remoteSync) return;
+    // Peers that joined get a kart on their authoritative slot; peers that
+    // left lose theirs (visuals, race registration and minimap blip).
+    this.remoteSync.syncRoster(players);
+  }
+
+  // Advance every peer one fixed step along the interpolated server timeline.
+  // Runs inside the same fixed-step loop as the local physics so the renderer
+  // can blend peers between steps exactly like the local kart.
+  _onlineStepRemotes(dt) {
+    const client = this.onlineClient;
+    if (!client || !this.remoteSync || this.remoteSync.size === 0) return;
+    const view = client.sampleRemoteStates();
+    if (!view || !Array.isArray(view.players)) return;
+    this.remoteSync.step(dt, view.players);
+  }
+
+  // Publish the local kart: pose, movement state and race progress.
+  _onlineSendLocalState(playerInput) {
+    const client = this.onlineClient;
+    if (!client || !this.playerKart) return;
+    const v = this.playerKart.vehicle;
+    const st = this.race.kartState.get(v);
+    client.sendInput({
+      input: playerInput,
+      pos: { x: v.pos.x, y: v.y, z: v.pos.z, yaw: v.yaw, speed: v.fSpeed },
+      motion: {
+        steer: v.steer,
+        throttle: playerInput?.throttle ?? 0,
+        brake: playerInput?.brake ?? 0,
+        drift: v.drift.drifting,
+        driftLevel: v.drift.level,
+        boost: v.boost.boosting,
+        boostLevel: v.boost.active?.level ?? 0,
+        airborne: !v.grounded,
+      },
+      lap: st?.lap || 0,
+      checkpoint: st?.nextCp ? st.nextCp - 1 : -1,
+      progress: v.surf ? v.surf.progress : 0,
+      finished: st?.finished || false,
+    });
+    // if we finished locally, notify server
+    if (st?.finished && !this._onlineLocalFinishedSent) {
+      this._onlineLocalFinishedSent = true;
+      client.sendFinish();
     }
   }
 
@@ -1646,11 +1784,20 @@ class Game {
 
   _onlineLeaveRaceToMenu() {
     this.onlineClient?.leaveLobby();
+    this.onlineClient?.resetInterpolation();
     this.onlineLobby = null;
     this.onlinePlayerId = null;
-    this.onlineRemoteKarts.clear();
+    this._onlineClearRemotes();
     this._onlineFinishedShown = false;
     this.returnToMenu();
+  }
+
+  // Drop every peer kart (visuals, race registration and interpolation state).
+  _onlineClearRemotes() {
+    if (this.remoteSync) this.remoteSync.clear();
+    this.remoteSync = null;
+    this.onlineRemoteKarts.clear();
+    this._onlineRosterSig = null;
   }
 
   startBattle() {
@@ -1920,7 +2067,8 @@ class Game {
     }
     // online cleanup
     if (this.mode === 'online') {
-      this.onlineRemoteKarts.clear();
+      this._onlineClearRemotes();
+      this.onlineClient?.resetInterpolation();
       this._onlineFinishedShown = false;
       this._onlineLocalFinishedSent = false;
       // restore result buttons to default handlers
@@ -2837,15 +2985,16 @@ class Game {
         const playerInput = this.input.snapshot();
         this.race.playerInput = playerInput;
 
-        // run local physics + track
+        // Local physics + track. RaceManager skips remote karts (the server
+        // owns them), so each fixed step also advances every peer along the
+        // interpolated snapshot timeline - that is what makes other players
+        // visibly move, and it keeps them on the same render timeline as the
+        // local kart so the frame interpolation below works for everyone.
         this.accumulator += rawDt;
         let steps = 0;
         while (this.accumulator >= FIXED_DT && steps < 4) {
-          // only step local player vehicle via race manager? race.update steps all karts,
-          // but remote karts have no AI and we will override their pos after.
-          // So we allow race to update local only by temporarily disabling remote? Simpler: step local manually and let race handle checkpoints.
-          // For now, run full race update but remote vehicles will be overwritten by snapshot right after.
           this.race.update(FIXED_DT);
+          this._onlineStepRemotes(FIXED_DT);
           this.track.update(FIXED_DT, this.time);
           this.accumulator -= FIXED_DT;
           steps++;
@@ -2853,24 +3002,8 @@ class Game {
         if (steps === 4) this.accumulator = 0;
         const alpha = this.accumulator / FIXED_DT;
 
-        // send input + pos to server
-        if (this.onlineClient && this.playerKart) {
-          const v = this.playerKart.vehicle;
-          const st = this.race.kartState.get(v);
-          this.onlineClient.sendInput({
-            input: playerInput,
-            pos: { x: v.pos.x, y: v.pos.y, z: v.pos.z, yaw: v.yaw, speed: v.speedAbs },
-            lap: st?.lap || 0,
-            checkpoint: st?.nextCp ? st.nextCp - 1 : -1,
-            progress: v.surf ? v.surf.progress : 0,
-            finished: st?.finished || false,
-          });
-          // if we finished locally, notify server
-          if (st?.finished && !this._onlineLocalFinishedSent) {
-            this._onlineLocalFinishedSent = true;
-            this.onlineClient.sendFinish();
-          }
-        }
+        // publish the local kart (pose + movement state) to the server
+        this._onlineSendLocalState(playerInput);
 
         // visuals - local + remote (remote pos already set from snapshot, but we still interpolate)
         for (const kart of this.race.karts) {
@@ -2928,6 +3061,18 @@ class Game {
             this.race.state = 'results';
           }
         }
+      } else {
+        // A local pause never pauses an online race. Peers keep being
+        // replicated and our own (stationary) pose keeps being published, so
+        // nobody freezes on anybody else's screen and unpausing does not snap
+        // the whole field back into place.
+        this._onlineStepRemotes(Math.min(rawDt, 0.05));
+        for (const kart of this.race.karts) {
+          if (!kart.remote) continue;
+          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time, 1);
+          if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
+        }
+        this._onlineSendLocalState(IDLE_INPUT);
       }
 
       if (this.race.state === 'results' && this._lastRaceState !== 'results') {

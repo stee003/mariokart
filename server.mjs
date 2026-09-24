@@ -137,7 +137,57 @@ const MAX_PLAYERS = 8;
 const MIN_PLAYERS = 2;
 const LOBBY_TTL_MS = 5 * 60 * 1000; // empty lobby dies after 5 min
 const PLAYER_TIMEOUT_MS = 30000;
-const TICK_RATE = 20; // Hz server tick for racing lobbies
+const TICK_RATE = 20; // Hz server tick (snapshots are published every tick)
+// Idle lobbies still publish snapshots so everyone sees who is connected and
+// where they are; there is simply no need to do it 20 times per second.
+const LOBBY_SNAPSHOT_EVERY = 4; // ticks -> 5 Hz while nobody is racing
+
+// Every networked player carries the same shape, whether it was created over
+// HTTP or over the WebSocket: pose, movement state and race progress. Missing
+// fields used to make peers replicate as "position only", which is why remote
+// karts never drifted, boosted or left the ground on other screens.
+function makePlayer({ id, name, color, isHost = false, ready = false, connected = false, conn = null }) {
+  return {
+    id,
+    name,
+    color: color === undefined ? Math.floor(Math.random() * 0xffffff) : color,
+    ready,
+    isHost,
+    connected,
+    conn,
+    // pose
+    x: 0, y: 0, z: 0, yaw: 0, speed: 0,
+    hasPose: false,
+    slot: null,
+    // movement state (replicated so peers animate, not just translate)
+    steer: 0, throttle: 0, brake: 0,
+    drift: false, driftLevel: 0, boost: false, boostLevel: 0, airborne: false,
+    // race progress
+    lap: 0, checkpoint: -1, progress: 0,
+    finished: false, finishTime: null,
+    raceReady: false,
+    seq: 0,
+    lastUpdate: now(),
+  };
+}
+
+// Wire format for one player inside a snapshot. Kept flat and short-lived:
+// it is serialized TICK_RATE times per second for every member of the lobby.
+function playerSnapshot(p) {
+  return {
+    id: p.id, name: p.name, color: p.color,
+    x: p.x, y: p.y, z: p.z, yaw: p.yaw, speed: p.speed,
+    steer: p.steer, throttle: p.throttle, brake: p.brake,
+    drift: !!p.drift, driftLevel: p.driftLevel || 0,
+    boost: !!p.boost, boostLevel: p.boostLevel || 0,
+    airborne: !!p.airborne,
+    lap: p.lap, checkpoint: p.checkpoint, progress: p.progress,
+    finished: !!p.finished, finishTime: p.finishTime,
+    connected: !!p.connected, ready: !!p.ready, isHost: !!p.isHost,
+    raceReady: !!p.raceReady, hasPose: !!p.hasPose,
+    slot: p.slot, seq: p.seq || 0,
+  };
+}
 
 class Lobby {
   constructor({ id, name, trackId, maxPlayers, hostId, hostName }) {
@@ -167,7 +217,16 @@ class Lobby {
     if (this.state !== 'lobby') return false;
     this.players.set(player.id, player);
     if (!this.hostId) this.hostId = player.id;
+    // Start slots are authoritative so every client builds the same grid.
+    // Without this each client placed ITSELF last and shuffled everyone else,
+    // so the first snapshot yanked all peers across the start line.
+    this.assignSlots();
     return true;
+  }
+
+  assignSlots() {
+    let i = 0;
+    for (const p of this.players.values()) p.slot = i++;
   }
 
   removePlayer(playerId) {
@@ -184,6 +243,9 @@ class Lobby {
       }
     }
     if (p) p.isHost = false;
+    // Grid slots only reshuffle while nobody is on track; renumbering mid-race
+    // would teleport every remaining kart.
+    if (this.state === 'lobby') this.assignSlots();
   }
 
   getPlayer(playerId) { return this.players.get(playerId); }
@@ -204,7 +266,8 @@ class Lobby {
       hostId: this.hostId,
       createdAt: this.createdAt,
       players: [...this.players.values()].map(p => ({
-        id: p.id, name: p.name, color: p.color, ready: p.ready, isHost: p.isHost, connected: p.connected,
+        id: p.id, name: p.name, color: p.color, ready: p.ready, isHost: p.isHost,
+        connected: p.connected, slot: p.slot,
       })),
     };
   }
@@ -218,6 +281,26 @@ class Lobby {
       raceTime: this.raceTime,
       tick: this.tick,
       messages: this.messages.slice(-50),
+      standings: this.computeStandings(),
+      // Members get the full replicated state, so a client joining mid-session
+      // can build every peer kart straight from the lobby payload.
+      players: [...this.players.values()].map(playerSnapshot),
+    };
+  }
+
+  // Authoritative world state pushed to every member every tick.
+  snapshot() {
+    return {
+      type: 'snapshot',
+      tick: this.tick,
+      t: now(),
+      state: this.state,
+      raceTime: this.raceTime,
+      countdown: this.countdown,
+      trackId: this.trackId,
+      laps: this.laps,
+      hostId: this.hostId,
+      players: [...this.players.values()].map(playerSnapshot),
       standings: this.computeStandings(),
     };
   }
@@ -249,6 +332,7 @@ class Lobby {
     this.raceTime = 0;
     this.tick = 0;
     this.finishedPlayers = [];
+    this.assignSlots();
     for (const p of this.players.values()) {
       p.lap = 0;
       p.checkpoint = -1;
@@ -257,6 +341,12 @@ class Lobby {
       p.progress = 0;
       p.raceReady = false;
       p.hasPose = false;
+      p.speed = 0;
+      p.drift = false;
+      p.driftLevel = 0;
+      p.boost = false;
+      p.airborne = false;
+      p.steer = 0;
     }
     return true;
   }
@@ -301,25 +391,49 @@ class Lobby {
     }
   }
 
-  // validate and apply player position update
+  // Movement state travels with every pose update. It is what makes a peer
+  // read as "driving" on the other screens (wheels steering, drift smoke,
+  // boost flames, airborne tuck) instead of sliding around flat.
+  applyMovementState(p, update) {
+    const n = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
+    if (update.steer !== undefined) p.steer = Math.max(-1, Math.min(1, n(update.steer)));
+    if (update.throttle !== undefined) p.throttle = Math.max(-1, Math.min(1, n(update.throttle)));
+    if (update.brake !== undefined) p.brake = Math.max(0, Math.min(1, n(update.brake)));
+    if (update.drift !== undefined) p.drift = !!update.drift;
+    if (update.driftLevel !== undefined) p.driftLevel = Math.max(0, Math.min(3, Math.floor(n(update.driftLevel))));
+    if (update.boost !== undefined) p.boost = !!update.boost;
+    if (update.boostLevel !== undefined) p.boostLevel = Math.max(0, Math.min(3, Math.floor(n(update.boostLevel))));
+    if (update.airborne !== undefined) p.airborne = !!update.airborne;
+    if (update.seq !== undefined) p.seq = Math.max(0, Math.floor(n(update.seq)));
+  }
+
+  // Validate and apply a player pose + movement state update.
   applyPlayerUpdate(playerId, update) {
     const p = this.players.get(playerId);
     if (!p) return { valid: false, reason: 'unknown player' };
+
+    const nx = Number(update.x), ny = Number(update.y), nz = Number(update.z);
+    const yaw = Number(update.yaw);
+    const speed = Number(update.speed);
+
     if (this.state !== 'racing' && this.state !== 'countdown') {
-      // allow position updates in lobby for preview? ignore
-      // but we still allow x,z for lobby character preview
-      if (update.x !== undefined) {
-        p.x = Number(update.x) || 0;
-        p.z = Number(update.z) || 0;
-        p.yaw = Number(update.yaw) || 0;
+      // Lobby / results phase: poses are still replicated (no anti-cheat, no
+      // race progress) so everyone can see the other connected players before
+      // and after the race instead of an empty world.
+      if (Number.isFinite(nx) && Number.isFinite(nz)) {
+        p.x = nx;
+        p.z = nz;
+        if (Number.isFinite(ny)) p.y = ny;
+        if (Number.isFinite(yaw)) p.yaw = yaw;
+        if (Number.isFinite(speed)) p.speed = Math.max(-40, Math.min(80, speed));
+        p.hasPose = true;
       }
+      this.applyMovementState(p, update);
+      p.lastUpdate = now();
       return { valid: true };
     }
 
     // Anti-cheat simple checks
-    const nx = Number(update.x), nz = Number(update.z);
-    const yaw = Number(update.yaw);
-    const speed = Number(update.speed);
     const lap = Math.floor(Number(update.lap) || 0);
     const checkpoint = Math.floor(Number(update.checkpoint) ?? -1);
     const progress = Number(update.progress) || 0;
@@ -330,7 +444,8 @@ class Lobby {
       const dt = 1 / TICK_RATE;
       const estSpeed = dist / dt;
       // teleport check: if dist > 25m in one tick, reject unless near start
-      if (dist > 30 && this.raceTime > 2) {
+      // (the first pose of a race is exempt: it establishes the grid slot).
+      if (dist > 30 && this.raceTime > 2 && p.hasPose) {
         return { valid: false, reason: 'teleport' };
       }
       // speed check
@@ -341,9 +456,13 @@ class Lobby {
       p.x = nx; p.z = nz;
       p.hasPose = true;
       p.lastUpdate = now();
+      if (Number.isFinite(ny)) p.y = ny;
       if (Number.isFinite(yaw)) p.yaw = yaw;
-      if (Number.isFinite(speed)) p.speed = Math.min(60, Math.max(0, speed));
+      // Reverse is legal, so the clamp is signed; it used to floor at 0 and
+      // peers backing up replicated as standing still.
+      if (Number.isFinite(speed)) p.speed = Math.min(60, Math.max(-40, speed));
       p.progress = progress;
+      this.applyMovementState(p, update);
     }
 
     if (Number.isFinite(lap)) {
@@ -600,18 +719,15 @@ function handleWsMessage(conn, msg) {
       const playerName = String(msg.playerName || 'Player').slice(0, 24) || 'Player';
       const playerId = randomId(8);
       const lobby = createLobby({ name, trackId, maxPlayers, hostId: playerId, hostName: playerName });
-      const player = {
+      const player = makePlayer({
         id: playerId,
         name: playerName,
-        color: msg.color || Math.floor(Math.random()*0xffffff),
+        color: msg.color,
         ready: true,
         isHost: true,
         connected: true,
-        x: 0, z: 0, yaw: 0, speed: 0, lap: 0, checkpoint: -1, progress: 0,
-        finished: false, finishTime: null,
-        lastUpdate: now(),
         conn,
-      };
+      });
       lobby.addPlayer(player);
       conn.playerId = playerId;
       conn.lobbyId = lobby.id;
@@ -619,6 +735,9 @@ function handleWsMessage(conn, msg) {
       conn.send({ type: 'connected', playerId });
       conn.send({ type: 'lobbyJoined', lobby: lobby.fullInfo(), playerId });
       broadcastLobby(lobby.id, { type: 'lobbyUpdate', lobby: lobby.fullInfo() }, null);
+      // Immediate snapshot so the new member does not wait up to a full
+      // heartbeat before the other players appear.
+      broadcastLobby(lobby.id, lobby.snapshot(), null);
       break;
     }
     case 'joinLobby': {
@@ -629,26 +748,24 @@ function handleWsMessage(conn, msg) {
       if (lobby.players.size >= lobby.maxPlayers) { conn.send({ type: 'error', message: 'lobby full' }); return; }
       if (lobby.state !== 'lobby') { conn.send({ type: 'error', message: 'race already started' }); return; }
       const playerId = randomId(8);
-      const player = {
+      const player = makePlayer({
         id: playerId,
         name: playerName,
-        color: msg.color || Math.floor(Math.random()*0xffffff),
+        color: msg.color,
         ready: false,
         isHost: false,
         connected: true,
-        x: 0, z: 0, yaw: 0, speed: 0, lap: 0, checkpoint: -1, progress: 0,
-        finished: false, finishTime: null,
-        lastUpdate: now(),
         conn,
-      };
+      });
       if (!lobby.addPlayer(player)) { conn.send({ type: 'error', message: 'cannot join' }); return; }
       conn.playerId = playerId;
       conn.lobbyId = lobby.id;
       conn.name = playerName;
       conn.send({ type: 'connected', playerId });
       conn.send({ type: 'lobbyJoined', lobby: lobby.fullInfo(), playerId });
-      broadcastLobby(lobby.id, { type: 'playerJoined', player: { id: player.id, name: player.name, color: player.color, isHost: player.isHost }, lobby: lobby.fullInfo() }, playerId);
+      broadcastLobby(lobby.id, { type: 'playerJoined', player: { id: player.id, name: player.name, color: player.color, isHost: player.isHost, slot: player.slot }, lobby: lobby.fullInfo() }, playerId);
       broadcastLobby(lobby.id, { type: 'lobbyUpdate', lobby: lobby.fullInfo() }, null);
+      broadcastLobby(lobby.id, lobby.snapshot(), null);
       break;
     }
     case 'listLobbies': {
@@ -661,6 +778,7 @@ function handleWsMessage(conn, msg) {
         if (lobby) {
           lobby.removePlayer(conn.playerId);
           broadcastLobby(lobby.id, { type: 'playerLeft', playerId: conn.playerId, lobby: lobby.fullInfo() }, null);
+          broadcastLobby(lobby.id, lobby.snapshot(), null);
           if (lobby.isEmpty()) {
             // keep for TTL, but we can also delete immediately if desired
             // lobbies.delete(lobby.id);
@@ -782,9 +900,11 @@ function handleDisconnect(conn) {
         if (lobby.state === 'lobby') {
           lobby.removePlayer(conn.playerId);
           broadcastLobby(lobby.id, { type: 'playerLeft', playerId: conn.playerId, lobby: lobby.fullInfo() }, null);
+          broadcastLobby(lobby.id, lobby.snapshot(), null);
         } else {
           // mark disconnected, broadcast
           broadcastLobby(lobby.id, { type: 'playerDisconnected', playerId: conn.playerId, lobby: lobby.fullInfo() }, null);
+          broadcastLobby(lobby.id, lobby.snapshot(), null);
           // schedule removal after timeout if not reconnected
           setTimeout(() => {
             const l = getLobby(conn.lobbyId);
@@ -793,6 +913,7 @@ function handleDisconnect(conn) {
             if (pl && !pl.connected) {
               l.removePlayer(conn.playerId);
               broadcastLobby(l.id, { type: 'playerLeft', playerId: conn.playerId, lobby: l.fullInfo() }, null);
+              broadcastLobby(l.id, l.snapshot(), null);
             }
           }, PLAYER_TIMEOUT_MS);
         }
@@ -813,36 +934,33 @@ function broadcastLobby(lobbyId, msg, excludePlayerId = null) {
   }
 }
 
-// Server tick for racing lobbies
+// Server tick. Racing lobbies advance their clock and publish a snapshot every
+// tick; idle lobbies publish a slower heartbeat snapshot so members always see
+// the current roster and the last known pose of every connected player.
+let serverTick = 0;
 setInterval(() => {
   const dt = 1 / TICK_RATE;
+  serverTick++;
   for (const lobby of lobbies.values()) {
-    if (lobby.state === 'countdown' || lobby.state === 'racing') {
-      const prevState = lobby.state;
+    const live = [...lobby.players.values()].some(p => p.connected);
+    if (!live) continue;
+    const active = lobby.state === 'countdown' || lobby.state === 'racing';
+    const prevState = lobby.state;
+
+    if (active) {
       lobby.update(dt);
       if (prevState === 'countdown' && lobby.state === 'racing') {
         broadcastLobby(lobby.id, { type: 'raceStart', lobby: lobby.fullInfo() }, null);
       }
-      // broadcast snapshot
-      const snapshot = {
-        type: 'snapshot',
-        tick: lobby.tick,
-        state: lobby.state,
-        raceTime: lobby.raceTime,
-        countdown: lobby.countdown,
-        players: [...lobby.players.values()].map(p => ({
-          id: p.id, name: p.name, color: p.color,
-          x: p.x, z: p.z, yaw: p.yaw, speed: p.speed,
-          lap: p.lap, checkpoint: p.checkpoint, progress: p.progress,
-          finished: p.finished, finishTime: p.finishTime,
-          connected: p.connected, raceReady: !!p.raceReady, hasPose: !!p.hasPose,
-        })),
-        standings: lobby.computeStandings(),
-      };
-      broadcastLobby(lobby.id, snapshot, null);
-      if (lobby.state === 'finished' && prevState !== 'finished') {
-        broadcastLobby(lobby.id, { type: 'raceFinished', standings: lobby.computeStandings(), lobby: lobby.fullInfo() }, null);
-      }
+    } else {
+      lobby.tick++;
+      if (serverTick % LOBBY_SNAPSHOT_EVERY !== 0) continue;
+    }
+
+    broadcastLobby(lobby.id, lobby.snapshot(), null);
+
+    if (active && lobby.state === 'finished' && prevState !== 'finished') {
+      broadcastLobby(lobby.id, { type: 'raceFinished', standings: lobby.computeStandings(), lobby: lobby.fullInfo() }, null);
     }
   }
 }, 1000 / TICK_RATE);
@@ -890,12 +1008,10 @@ function handleApi(req, res) {
       const playerName = String(body.playerName || 'Player').slice(0, 24);
       const hostId = randomId(8);
       const lobby = createLobby({ name, trackId, maxPlayers, hostId, hostName: playerName });
-      const player = {
-        id: hostId, name: playerName, color: body.color || Math.floor(Math.random()*0xffffff),
+      const player = makePlayer({
+        id: hostId, name: playerName, color: body.color,
         ready: true, isHost: true, connected: false,
-        x: 0, z: 0, yaw: 0, speed: 0, lap: 0, checkpoint: -1, progress: 0,
-        finished: false, finishTime: null, lastUpdate: now(), conn: null,
-      };
+      });
       lobby.addPlayer(player);
       sendJson(res, 201, { lobby: lobby.fullInfo(), playerId: hostId });
     }).catch(() => sendJson(res, 400, { error: 'invalid json' }));
@@ -918,12 +1034,10 @@ function handleApi(req, res) {
         if (lobby.players.size >= lobby.maxPlayers) return sendJson(res, 400, { error: 'lobby full' });
         if (lobby.state !== 'lobby') return sendJson(res, 400, { error: 'race already started' });
         const playerId = randomId(8);
-        const player = {
-          id: playerId, name: playerName, color: body.color || Math.floor(Math.random()*0xffffff),
+        const player = makePlayer({
+          id: playerId, name: playerName, color: body.color,
           ready: false, isHost: false, connected: false,
-          x: 0, z: 0, yaw: 0, speed: 0, lap: 0, checkpoint: -1, progress: 0,
-          finished: false, finishTime: null, lastUpdate: now(), conn: null,
-        };
+        });
         if (!lobby.addPlayer(player)) return sendJson(res, 400, { error: 'cannot join' });
         sendJson(res, 200, { lobby: lobby.fullInfo(), playerId });
         broadcastLobby(lobby.id, { type: 'lobbyUpdate', lobby: lobby.fullInfo() }, null);
