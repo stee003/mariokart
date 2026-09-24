@@ -51,6 +51,7 @@ import { CHARACTERS } from './content/characters.js';
 import { CHASSIS } from './content/chassis.js';
 import { WHEELS } from './content/wheels.js';
 import { PAINTS } from './content/cosmetics.js';
+import { OnlineClient } from './onlineMultiplayer.js';
 
 const FIXED_DT = 1 / 60;
 
@@ -73,7 +74,7 @@ class Game {
     this.settingsReturn = 'screen-main';
 
     // mode state -------------------------------------------------------------
-    this.mode = 'quick';             // quick | grandprix | timetrial
+    this.mode = 'quick';             // quick | grandprix | timetrial | battle | online
     this.gpSession = null;
     this.ttSession = null;
     this.ghostPlayer = null;
@@ -83,6 +84,20 @@ class Game {
     this._revealTimers = [];         // pending results-reveal audio cues
     this.battle = null;
     this._battleInput = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false, item: false };
+
+    // online multiplayer ------------------------------------------------------
+    this.onlineClient = null;
+    this.onlineLobby = null;
+    this.onlinePlayerId = null;
+    this.onlineRemoteKarts = new Map();
+    this.onlineRaceState = 'idle';
+    this.onlineCountdown = 0;
+    this.onlineRaceTime = 0;
+    this._onlineLastSnapshot = null;
+    this._onlinePing = 0;
+    this._onlineChatHistory = [];
+    this._onlineLastCount = null;
+    this._onlineFinishedShown = false;
 
     // renderer ---------------------------------------------------------------
     const canvas = document.getElementById('game');
@@ -348,10 +363,36 @@ class Game {
     click('btn-mode-gp', () => this.openCupSelect());
     click('btn-mode-tt', () => this.openTrackSelect('timetrial'));
     click('btn-mode-battle', () => this.openBattleSelect());
+    click('btn-mode-online', () => this.openOnlineBrowser());
     click('btn-mode-back', () => this.hud.showScreen('screen-main'));
     click('btn-tracksel-back', () => this.openModeSelect());
     click('btn-cupsel-back', () => this.openModeSelect());
     click('btn-battlesel-back', () => this.openModeSelect());
+
+    // online browser
+    click('btn-online-back', () => {
+      this._onlineDisconnectIfNeeded();
+      this.hud.showScreen('screen-mode');
+    });
+    click('btn-online-create', () => this._onlineCreateLobby());
+    click('btn-online-refresh', () => this._onlineRefreshLobbies());
+    click('btn-online-join-id', () => this._onlineJoinById());
+    click('btn-online-leave', () => this._onlineLeaveLobby());
+    click('btn-online-ready', () => this._onlineToggleReady());
+    click('btn-online-start', () => this._onlineStartRace());
+    click('btn-online-chat-send', () => this._onlineSendChat());
+    $('online-chat-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._onlineSendChat();
+    });
+    $('online-name')?.addEventListener('change', (e) => {
+      this.save.set('onlineName', e.target.value.slice(0,24));
+    });
+    $('online-create-name')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._onlineCreateLobby();
+    });
+    $('online-join-id')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._onlineJoinById();
+    });
     click('btn-battle-start', () => this._startBattle());
 
     // language
@@ -620,6 +661,8 @@ class Game {
     if (visible('screen-cupselect')) this._renderCupList();
     if (visible('screen-battleselect')) this._renderBattleLists();
     if (visible('screen-garage')) this._renderGarage();
+    if (visible('screen-online')) this._populateOnlineTrackSelects();
+    if (visible('screen-onlinelobby')) this._populateOnlineTrackSelects();
     this._renderKeysList();
     this._refreshMenuMeta();
   }
@@ -924,6 +967,624 @@ class Game {
     this.startBattle();
   }
 
+  // ------------------------------------------------------------------ online
+  _ensureOnlineClient() {
+    if (this.onlineClient) return this.onlineClient;
+    this.onlineClient = new OnlineClient({
+      onEvent: (type, payload) => this._onOnlineEvent(type, payload),
+      onSnapshot: (snap) => this._onOnlineSnapshot(snap),
+      onLobbyUpdate: (lobby) => this._onOnlineLobbyUpdate(lobby),
+      onChat: (msg) => this._onOnlineChat(msg),
+      onError: (err) => {
+        console.warn('[online]', err);
+        const el = document.getElementById('online-status-text');
+        if (el) el.textContent = err;
+        this.hud.notify(err);
+      },
+    });
+    return this.onlineClient;
+  }
+
+  openOnlineBrowser() {
+    this.mode = 'online';
+    const nameInput = document.getElementById('online-name');
+    if (nameInput) {
+      const saved = this.save.get('onlineName', '') || this.save.get('playerName', '') || `Racer${Math.floor(Math.random()*999)}`;
+      nameInput.value = saved;
+      this.save.set('onlineName', saved);
+    }
+    this._populateOnlineTrackSelects();
+    this.hud.showScreen('screen-online');
+    this._onlineConnectAndRefresh();
+  }
+
+  _populateOnlineTrackSelects() {
+    const selIds = ['online-create-track', 'online-lobby-track-select'];
+    for (const id of selIds) {
+      const sel = document.getElementById(id);
+      if (!sel) continue;
+      const cur = sel.value;
+      sel.innerHTML = '';
+      for (const def of TRACK_DEFS) {
+        const opt = document.createElement('option');
+        opt.value = def.id;
+        opt.textContent = this.i18n.t(def.nameKey);
+        sel.appendChild(opt);
+      }
+      for (const a of ARENAS) {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = `${this.i18n.t(a.nameKey)} [Battle]`;
+        sel.appendChild(opt);
+      }
+      if (cur) sel.value = cur;
+      else if (id === 'online-create-track') sel.value = this.save.get('lastTrack', 'sunforge_circuit');
+    }
+  }
+
+  async _onlineConnectAndRefresh() {
+    const client = this._ensureOnlineClient();
+    const statusEl = document.getElementById('online-status-text');
+    const pingEl = document.getElementById('online-ping');
+    if (statusEl) statusEl.textContent = this.i18n.t('online.connecting');
+    try {
+      await client.connect();
+      if (statusEl) statusEl.textContent = this.i18n.t('online.connected');
+      const t0 = performance.now();
+      const res = await fetch('/api/health').then(r=>r.json()).catch(()=>null);
+      if (res && pingEl) {
+        const ms = Math.round(performance.now() - t0);
+        this._onlinePing = ms;
+        pingEl.textContent = this.i18n.t('online.ping', { ms });
+      }
+      this._onlineRefreshLobbies();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = this.i18n.t('online.disconnected');
+      this._onlineRefreshLobbiesHttp();
+    }
+  }
+
+  async _onlineRefreshLobbies() {
+    const client = this._ensureOnlineClient();
+    try {
+      await client.listLobbies();
+      this._onlineRefreshLobbiesHttp();
+    } catch {
+      this._onlineRefreshLobbiesHttp();
+    }
+  }
+
+  async _onlineRefreshLobbiesHttp() {
+    try {
+      const res = await fetch('/api/lobbies');
+      const data = await res.json();
+      this._renderOnlineLobbyList(data.lobbies || []);
+    } catch {}
+  }
+
+  _renderOnlineLobbyList(lobbies) {
+    const list = document.getElementById('online-lobby-list');
+    const count = document.getElementById('online-lobby-count');
+    if (!list) return;
+    list.innerHTML = '';
+    if (count) count.textContent = `${lobbies.length} ${lobbies.length===1?'lobby':'lobbies'}`;
+    if (!lobbies.length) {
+      const empty = document.createElement('div');
+      empty.className = 'online-status';
+      empty.textContent = this.i18n.t('online.noLobbies');
+      list.appendChild(empty);
+      return;
+    }
+    for (const lobby of lobbies) {
+      const row = document.createElement('button');
+      row.className = 'btn online-lobby-row';
+      const left = document.createElement('div');
+      left.className = 'lobby-left';
+      const name = document.createElement('div');
+      name.className = 'lobby-name';
+      name.textContent = lobby.name;
+      const meta = document.createElement('div');
+      meta.className = 'lobby-meta';
+      const trackDef = TRACK_DEFS.find(d=>d.id===lobby.trackId);
+      const arenaDef = ARENAS.find(a=>a.id===lobby.trackId);
+      const trackName = trackDef ? this.i18n.t(trackDef.nameKey) : (arenaDef ? this.i18n.t(arenaDef.nameKey) : lobby.trackId);
+      const stateKey = lobby.state==='lobby'?'inLobby': lobby.state==='countdown'?'countdownState': lobby.state==='racing'?'racing':'finished';
+      meta.textContent = `${trackName} · ${lobby.playerCount}/${lobby.maxPlayers} · ${this.i18n.t('online.'+stateKey)}`;
+      left.append(name, meta);
+      const right = document.createElement('div');
+      right.className = 'lobby-right';
+      right.textContent = lobby.id;
+      row.append(left, right);
+      row.addEventListener('click', () => {
+        this.audio.click();
+        this._onlineJoinLobby(lobby.id);
+      });
+      list.appendChild(row);
+    }
+  }
+
+  _onlineGetPlayerName() {
+    const input = document.getElementById('online-name');
+    const name = (input?.value || this.save.get('onlineName','') || 'Player').trim().slice(0,24) || 'Player';
+    this.save.set('onlineName', name);
+    return name;
+  }
+
+  async _onlineCreateLobby() {
+    const nameInput = document.getElementById('online-create-name');
+    const trackSel = document.getElementById('online-create-track');
+    const maxSel = document.getElementById('online-create-max');
+    const lobbyName = (nameInput?.value || `${this._onlineGetPlayerName()}'s Race`).trim().slice(0,48) || 'Race';
+    const trackId = trackSel?.value || 'sunforge_circuit';
+    const maxPlayers = parseInt(maxSel?.value || '8', 10);
+    const playerName = this._onlineGetPlayerName();
+    const loadout = buildLoadout(this.save.get('loadout', {}));
+    const color = loadout.visual.bodyColor || Math.floor(Math.random()*0xffffff);
+    const client = this._ensureOnlineClient();
+    const statusEl = document.getElementById('online-status-text');
+    if (statusEl) statusEl.textContent = this.i18n.t('online.connecting');
+    try {
+      const lobby = await client.createLobby({ name: lobbyName, trackId, maxPlayers, playerName, color });
+      this.onlineLobby = lobby;
+      this.onlinePlayerId = client.playerId;
+      this.hud.showScreen('screen-onlinelobby');
+      this._renderOnlineLobby(lobby);
+      if (statusEl) statusEl.textContent = this.i18n.t('online.connected');
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+      this.hud.notify(e.message);
+    }
+  }
+
+  async _onlineJoinLobby(lobbyId) {
+    const playerName = this._onlineGetPlayerName();
+    const loadout = buildLoadout(this.save.get('loadout', {}));
+    const color = loadout.visual.bodyColor || Math.floor(Math.random()*0xffffff);
+    const client = this._ensureOnlineClient();
+    try {
+      const lobby = await client.joinLobby(lobbyId, playerName, color);
+      this.onlineLobby = lobby;
+      this.onlinePlayerId = client.playerId;
+      this.hud.showScreen('screen-onlinelobby');
+      this._renderOnlineLobby(lobby);
+    } catch (e) {
+      this.hud.notify(e.message);
+      const statusEl = document.getElementById('online-status-text');
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  }
+
+  _onlineJoinById() {
+    const input = document.getElementById('online-join-id');
+    const id = (input?.value || '').trim();
+    if (!id) return;
+    this._onlineJoinLobby(id);
+  }
+
+  _onlineLeaveLobby() {
+    const client = this.onlineClient;
+    if (client) client.leaveLobby();
+    this.onlineLobby = null;
+    this.onlinePlayerId = null;
+    this.onlineRemoteKarts.clear();
+    this.hud.showScreen('screen-online');
+    this._onlineRefreshLobbies();
+  }
+
+  _onlineDisconnectIfNeeded() {
+    if (!this.onlineLobby) {
+      this.onlineClient?.disconnect();
+      this.onlineClient = null;
+    }
+  }
+
+  _onlineToggleReady() {
+    const client = this.onlineClient;
+    if (!client || !this.onlineLobby) return;
+    const me = this.onlineLobby.players.find(p=>p.id===this.onlinePlayerId);
+    const newReady = me ? !me.ready : true;
+    client.setReady(newReady);
+  }
+
+  _onlineStartRace() {
+    const client = this.onlineClient;
+    if (!client) return;
+    client.startRace();
+  }
+
+  _onlineSendChat() {
+    const input = document.getElementById('online-chat-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    this.onlineClient?.sendChat(text);
+    input.value = '';
+  }
+
+  _renderOnlineLobby(lobby) {
+    if (!lobby) return;
+    this.onlineLobby = lobby;
+    const nameEl = document.getElementById('online-lobby-name');
+    const idEl = document.getElementById('online-lobby-id');
+    const trackEl = document.getElementById('online-lobby-track');
+    const countEl = document.getElementById('online-lobby-count2');
+    const playerList = document.getElementById('online-player-list');
+    const trackSel = document.getElementById('online-lobby-track-select');
+    const statusEl = document.getElementById('online-lobby-status');
+    const readyBtn = document.getElementById('btn-online-ready');
+    const startBtn = document.getElementById('btn-online-start');
+
+    if (nameEl) nameEl.textContent = lobby.name;
+    if (idEl) idEl.textContent = `ID: ${lobby.id}`;
+    const trackDef = TRACK_DEFS.find(d=>d.id===lobby.trackId) || ARENAS.find(a=>a.id===lobby.trackId);
+    const trackName = trackDef ? this.i18n.t(trackDef.nameKey) : lobby.trackId;
+    if (trackEl) trackEl.textContent = trackName;
+    if (countEl) countEl.textContent = `${lobby.playerCount||lobby.players.length}/${lobby.maxPlayers}`;
+    if (trackSel) {
+      trackSel.value = lobby.trackId;
+      const me = lobby.players.find(p=>p.id===this.onlinePlayerId);
+      trackSel.disabled = !me?.isHost;
+      trackSel.onchange = () => {
+        if (me?.isHost) this.onlineClient?.updateTrack(trackSel.value);
+      };
+    }
+
+    if (playerList) {
+      playerList.innerHTML = '';
+      for (const p of lobby.players) {
+        const row = document.createElement('div');
+        row.className = 'online-player-row' + (p.id===this.onlinePlayerId ? ' you' : '');
+        const col = document.createElement('span');
+        col.className = 'player-color';
+        col.style.background = `#${(p.color||0).toString(16).padStart(6,'0')}`;
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = p.name + (p.id===this.onlinePlayerId ? ` (${this.i18n.t('online.you')})` : '');
+        const stat = document.createElement('span');
+        stat.className = 'player-status';
+        if (p.isHost) { stat.classList.add('host'); stat.textContent = this.i18n.t('online.host'); }
+        else if (p.ready) { stat.classList.add('ready'); stat.textContent = this.i18n.t('online.ready'); }
+        else { stat.textContent = this.i18n.t('online.notReady'); }
+        if (!p.connected) stat.textContent += ' (dc)';
+        row.append(col, name, stat);
+        playerList.appendChild(row);
+      }
+    }
+
+    if (readyBtn && startBtn && statusEl) {
+      const me = lobby.players.find(p=>p.id===this.onlinePlayerId);
+      if (me?.isHost) {
+        readyBtn.classList.add('hidden');
+        startBtn.classList.remove('hidden');
+        startBtn.disabled = lobby.players.length < 1;
+        statusEl.textContent = lobby.players.every(pl=>pl.ready || pl.isHost) ? 'All ready!' : 'Waiting for players to ready…';
+      } else {
+        readyBtn.classList.remove('hidden');
+        startBtn.classList.add('hidden');
+        if (me) {
+          readyBtn.textContent = me.ready ? this.i18n.t('online.notReady') : this.i18n.t('online.ready');
+          readyBtn.classList.toggle('selected', !!me.ready);
+        }
+        statusEl.textContent = this.i18n.t('online.waiting');
+      }
+    }
+
+    this._renderOnlineChat(lobby.messages || []);
+  }
+
+  _renderOnlineChat(messages) {
+    const log = document.getElementById('online-chat-log');
+    if (!log) return;
+    log.innerHTML = '';
+    for (const m of (messages||[]).slice(-50)) {
+      const div = document.createElement('div');
+      div.className = 'chat-msg';
+      const name = document.createElement('span');
+      name.className = 'chat-name';
+      name.textContent = m.name + ': ';
+      const text = document.createElement('span');
+      text.className = 'chat-text';
+      text.textContent = m.message;
+      div.append(name, text);
+      log.appendChild(div);
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+
+  _onOnlineChat(msg) {
+    const log = document.getElementById('online-chat-log');
+    if (!log) return;
+    const div = document.createElement('div');
+    div.className = 'chat-msg';
+    const name = document.createElement('span');
+    name.className = 'chat-name';
+    name.textContent = msg.name + ': ';
+    const text = document.createElement('span');
+    text.className = 'chat-text';
+    text.textContent = msg.message;
+    div.append(name, text);
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  _onOnlineLobbyUpdate(lobby) {
+    this._renderOnlineLobby(lobby);
+  }
+
+  _onOnlineEvent(type, payload) {
+    if (type === 'lobbyList') {
+      this._renderOnlineLobbyList(payload.lobbies || []);
+    } else if (type === 'countdown') {
+      this.onlineRaceState = 'countdown';
+      this.onlineCountdown = payload.value || payload.countdown || 3;
+      this.onlineLobby = payload.lobby || this.onlineLobby;
+      if (this.appState !== 'race') {
+        const statusEl = document.getElementById('online-lobby-status');
+        if (statusEl) statusEl.textContent = this.i18n.t('online.countdown', { n: Math.ceil(this.onlineCountdown) });
+        this.hud.countdown(String(Math.ceil(this.onlineCountdown)));
+      }
+      if (payload.lobby) this._renderOnlineLobby(payload.lobby);
+    } else if (type === 'raceStart') {
+      this._onlineBeginRace(payload.lobby || this.onlineLobby);
+    } else if (type === 'raceFinished') {
+      this._onOnlineRaceFinished(payload);
+    } else if (type === 'playerJoined' || type === 'playerLeft' || type === 'playerDisconnected') {
+      if (payload.lobby) this._renderOnlineLobby(payload.lobby);
+      const log = document.getElementById('online-chat-log');
+      if (log) {
+        const div = document.createElement('div');
+        div.className = 'chat-msg system';
+        div.textContent = type === 'playerJoined' ? `${payload.player?.name} joined` : `${payload.playerId} left`;
+        log.appendChild(div);
+      }
+    } else if (type === 'error') {
+      this.hud.notify(payload.message);
+    }
+  }
+
+  _onlineBeginRace(lobby) {
+    if (!lobby) lobby = this.onlineLobby;
+    if (!lobby) return;
+    this.onlineLobby = lobby;
+    this.mode = 'online';
+    this.onlineRaceState = 'racing';
+    const trackId = lobby.trackId;
+    this._loadTrack(trackId, false, { rivals: Math.max(0, lobby.players.length - 1) });
+    this._setupOnlineRaceKarts(lobby);
+    this.startOnlineRace();
+  }
+
+  _setupOnlineRaceKarts(lobby) {
+    const players = lobby.players || [];
+    const localId = this.onlinePlayerId;
+    if (this.kartVisuals) {
+      for (const vis of this.kartVisuals.values()) {
+        this.scene.remove(vis.group);
+        this.scene.remove(vis.shadow);
+        disposeTree(vis.group);
+        disposeTree(vis.shadow);
+      }
+    }
+    this.kartVisuals = new Map();
+    this.race.karts = [];
+    this.race.kartState.clear();
+    this.onlineRemoteKarts.clear();
+
+    const loadout = buildLoadout(this.save.get('loadout', {}));
+    const localPlayerInfo = players.find(p=>p.id===localId);
+
+    const localVehicle = new VehicleController(this.track, true, loadout.params, loadout.driftMods);
+    const localVis = buildKart(loadout.visual.bodyColor, loadout.visual.accentColor, loadout.visual.pilotColor);
+    this.scene.add(localVis.group);
+    this.scene.add(localVis.shadow);
+    this.kartVisuals.set(localVehicle, localVis);
+    const localKart = {
+      vehicle: localVehicle,
+      ai: null,
+      nameKey: 'ai.you',
+      isPlayer: true,
+      charVis: localVis.charVis || null,
+      minimapColor: loadout.visual.bodyColor,
+      playerId: localId,
+      playerName: localPlayerInfo?.name || 'You',
+    };
+    this.race.registerKart(localKart);
+    this.playerKart = localKart;
+
+    for (const p of players) {
+      if (p.id === localId) continue;
+      const veh = new VehicleController(this.track, false);
+      const col = p.color || 0xffaa00;
+      const vis = buildKart(col, 0xffffff, 0xcccccc);
+      this.scene.add(vis.group);
+      this.scene.add(vis.shadow);
+      this.kartVisuals.set(veh, vis);
+      const kart = {
+        vehicle: veh,
+        ai: null,
+        nameKey: p.name,
+        isPlayer: false,
+        charVis: vis.charVis || null,
+        minimapColor: col,
+        playerId: p.id,
+        playerName: p.name,
+        remote: true,
+      };
+      this.race.registerKart(kart);
+      this.onlineRemoteKarts.set(p.id, { kart, vehicle: veh, visual: vis, lastPos: null });
+    }
+
+    this._placeOnGrid();
+  }
+
+  startOnlineRace() {
+    this.appState = 'race';
+    this.hud.hideScreens();
+    this.hud.showHUD(true);
+    this.audio.resume();
+    this.music.resume();
+
+    this.race.lapsOverride = this.onlineLobby?.laps || 3;
+    this.race.itemsEnabled = false;
+    this.race.restart();
+    this.hud.setItem(null);
+    for (const m of this.itemVisuals.boxMeshes) m.visible = false;
+    this.camCtl.snapTo(this.playerKart.vehicle);
+    this.accumulator = 0;
+    this._lastRaceState = 'countdown';
+    this._celebrate = null;
+    this._clearRevealTimers();
+    this.hud.setCinematic(false);
+    this.music.setState('countdown');
+    this.onlineRaceState = 'countdown';
+    this.onlineCountdown = this.onlineLobby?.countdown || 3.5;
+    this.onlineRaceTime = 0;
+    this._onlineLastSnapshot = null;
+    this._onlineFinishedShown = false;
+    this._onlineLastCount = null;
+    this._onlineLocalFinishedSent = false;
+  }
+
+  _onOnlineSnapshot(snap) {
+    this._onlineLastSnapshot = snap;
+    this.onlineRaceState = snap.state;
+    this.onlineRaceTime = snap.raceTime;
+    this.onlineCountdown = snap.countdown;
+
+    if (this.appState !== 'race') {
+      if (snap.lobby) this._renderOnlineLobby(snap.lobby);
+      return;
+    }
+
+    if (snap.players) {
+      for (const p of snap.players) {
+        if (p.id === this.onlinePlayerId) continue;
+        const remote = this.onlineRemoteKarts.get(p.id);
+        if (!remote) {
+          const veh = new VehicleController(this.track, false);
+          const col = p.color || 0xffaa00;
+          const vis = buildKart(col, 0xffffff, 0xcccccc);
+          this.scene.add(vis.group);
+          this.scene.add(vis.shadow);
+          this.kartVisuals.set(veh, vis);
+          const kart = {
+            vehicle: veh,
+            ai: null,
+            nameKey: p.name,
+            isPlayer: false,
+            charVis: vis.charVis || null,
+            minimapColor: col,
+            playerId: p.id,
+            playerName: p.name,
+            remote: true,
+          };
+          this.race.registerKart(kart);
+          this.onlineRemoteKarts.set(p.id, { kart, vehicle: veh, visual: vis, lastPos: p });
+        } else {
+          remote.lastPos = p;
+          remote.vehicle.pos.set(p.x, remote.vehicle.pos.y, p.z);
+          remote.vehicle.yaw = p.yaw;
+          remote.vehicle.fSpeed = p.speed || 0;
+          const st = this.race.kartState.get(remote.vehicle);
+          if (st) {
+            st.lap = p.lap || 0;
+            st.finished = !!p.finished;
+            if (p.finished) st.finishTime = p.finishTime;
+          }
+        }
+      }
+    }
+
+    if (snap.state === 'countdown') {
+      const ceil = Math.ceil(snap.countdown);
+      if (ceil !== this._onlineLastCount && ceil >= 1) {
+        this._onlineLastCount = ceil;
+        this.hud.countdown(String(ceil));
+        this.audio.countBeep(false);
+      }
+    } else if (snap.state === 'racing' && this._onlineLastCount !== -1) {
+      if (this._onlineLastCount !== null && this._onlineLastCount !== undefined) {
+        this.hud.countdown(this.i18n.t('race.go'), true);
+        this.audio.countBeep(true);
+        this.music.setState('racing');
+      }
+      this._onlineLastCount = -1;
+    }
+  }
+
+  _onOnlineRaceFinished(payload) {
+    if (this._onlineFinishedShown) return;
+    this._onlineFinishedShown = true;
+    const standings = payload.standings || this.onlineLobby?.standings || [];
+    const i18n = this.i18n;
+    this.hud.showHUD(false);
+    const headline = document.getElementById('results-headline');
+    const winner = standings[0];
+    headline.textContent = winner ? i18n.t('battle.win', { name: winner.name }) : i18n.t('battle.timeUp');
+
+    const rowsEl = document.getElementById('results-rows');
+    rowsEl.innerHTML = '';
+    standings.forEach((row, idx) => {
+      const div = document.createElement('div');
+      div.className = 'result-row' + (row.id === this.onlinePlayerId ? ' you' : '');
+      const pos = document.createElement('span');
+      pos.className = 'result-pos';
+      pos.textContent = row.finished ? i18n.t('ordinal.' + Math.min(8, idx+1)) : 'DNF';
+      const name = document.createElement('span');
+      name.className = 'result-name';
+      name.textContent = row.name;
+      const stat = document.createElement('span');
+      stat.className = 'result-time';
+      stat.textContent = row.finished && row.finishTime ? formatTime(row.finishTime) : (row.finished ? '' : i18n.t('online.racing'));
+      div.append(pos, name, stat);
+      this.hud.revealRow(div, idx);
+      rowsEl.appendChild(div);
+    });
+    this.hud.revealHeadline(headline);
+    document.getElementById('results-stats').textContent = `Track: ${payload.lobby?.trackId || this.onlineLobby?.trackId} · ${this.i18n.t('online.race')}`;
+    const extra = document.getElementById('results-extra');
+    extra.innerHTML = '';
+    const btnRestart = document.getElementById('btn-results-restart');
+    btnRestart.textContent = this.i18n.t('online.returnToLobby');
+    const self = this;
+    btnRestart.onclick = () => {
+      self.audio.click();
+      self._onlineReturnToLobby();
+    };
+    document.getElementById('btn-results-menu').onclick = () => {
+      self.audio.click();
+      self._onlineLeaveRaceToMenu();
+    };
+
+    this.hud.showScreen('screen-results');
+    const playerWon = winner && winner.id === this.onlinePlayerId;
+    this.hud.spawnConfetti(playerWon ? 44 : winner ? 22 : 0, Math.round((payload.lobby?.raceTime||0)*1000));
+    this.music.setState(playerWon ? 'victory' : 'defeat');
+  }
+
+  _onlineReturnToLobby() {
+    this.onlineClient?.returnToLobby();
+    this.appState = 'menu';
+    this.race.state = 'idle';
+    this.hud.showHUD(false);
+    this.hud.setItem(null);
+    this.hud.showScreen('screen-onlinelobby');
+    this.audio.stopEngine();
+    this.music.setState('menu');
+    this.items.reset();
+    this._onlineFinishedShown = false;
+    if (this.onlineLobby) this._renderOnlineLobby(this.onlineLobby);
+  }
+
+  _onlineLeaveRaceToMenu() {
+    this.onlineClient?.leaveLobby();
+    this.onlineLobby = null;
+    this.onlinePlayerId = null;
+    this.onlineRemoteKarts.clear();
+    this._onlineFinishedShown = false;
+    this.returnToMenu();
+  }
+
   startBattle() {
     this.appState = 'race';
     this.hud.hideScreens();
@@ -1188,6 +1849,30 @@ class Game {
       this._setBattleHud(false);
       document.getElementById('hud-pos').classList.remove('hidden');
       document.getElementById('hud-lap').classList.remove('hidden');
+    }
+    // online cleanup
+    if (this.mode === 'online') {
+      this.onlineRemoteKarts.clear();
+      this._onlineFinishedShown = false;
+      this._onlineLocalFinishedSent = false;
+      // restore result buttons to default handlers
+      const btnRestart = document.getElementById('btn-results-restart');
+      const btnMenu = document.getElementById('btn-results-menu');
+      if (btnRestart) btnRestart.onclick = null;
+      if (btnMenu) btnMenu.onclick = null;
+      // re-bind default
+      const $ = (id) => document.getElementById(id);
+      const click = (id, fn) => {
+        const el = $(id);
+        if (!el) return;
+        // remove previous listeners by cloning? simple add again (will stack but ok for now)
+        el.addEventListener('click', () => {
+          this.audio.init(); this.audio.resume(); this.audio.click();
+          this.music.init(); this.music.resume();
+          fn();
+        });
+      };
+      // ensure default handlers still work via onResultsPrimary
     }
     this._placeOnGrid();
   }
@@ -1784,6 +2469,115 @@ class Game {
           }
         }
       }
+    } else if (this.mode === 'online') {
+      // -------------------- ONLINE RACE
+      if (this.race.state === 'results' && this.input.keyPressed('confirm')) {
+        // results handled by online buttons, but allow confirm to return to lobby
+        if (this._onlineFinishedShown) this._onlineReturnToLobby();
+      }
+      if (!this.race.paused) {
+        const playerInput = this.input.snapshot();
+        this.race.playerInput = playerInput;
+
+        // run local physics + track
+        this.accumulator += rawDt;
+        let steps = 0;
+        while (this.accumulator >= FIXED_DT && steps < 4) {
+          // only step local player vehicle via race manager? race.update steps all karts,
+          // but remote karts have no AI and we will override their pos after.
+          // So we allow race to update local only by temporarily disabling remote? Simpler: step local manually and let race handle checkpoints.
+          // For now, run full race update but remote vehicles will be overwritten by snapshot right after.
+          this.race.update(FIXED_DT);
+          this.track.update(FIXED_DT, this.time);
+          this.accumulator -= FIXED_DT;
+          steps++;
+        }
+        if (steps === 4) this.accumulator = 0;
+        const alpha = this.accumulator / FIXED_DT;
+
+        // send input + pos to server
+        if (this.onlineClient && this.playerKart) {
+          const v = this.playerKart.vehicle;
+          const st = this.race.kartState.get(v);
+          this.onlineClient.sendInput({
+            input: playerInput,
+            pos: { x: v.pos.x, y: v.pos.y, z: v.pos.z, yaw: v.yaw, speed: v.speedAbs },
+            lap: st?.lap || 0,
+            checkpoint: st?.nextCp ? st.nextCp - 1 : -1,
+            progress: v.surf ? v.surf.progress : 0,
+            finished: st?.finished || false,
+          });
+          // if we finished locally, notify server
+          if (st?.finished && !this._onlineLocalFinishedSent) {
+            this._onlineLocalFinishedSent = true;
+            this.onlineClient.sendFinish();
+          }
+        }
+
+        // visuals - local + remote (remote pos already set from snapshot, but we still interpolate)
+        for (const kart of this.race.karts) {
+          // for remote, we already set pos directly, but still update visual
+          updateKartVisual(this.kartVisuals.get(kart.vehicle), kart.vehicle, rawDt, this.time, alpha);
+          if (kart.charVis) animateCharacter(kart.charVis, kart.vehicle, rawDt, this.time);
+        }
+        this.perFrameFX(rawDt);
+
+        // HUD - use online standings if available
+        const snap = this._onlineLastSnapshot;
+        if (snap && snap.standings) {
+          // compute local position from standings
+          const localPos = snap.standings.findIndex(s=>s.id===this.onlinePlayerId)+1;
+          if (localPos>0) {
+            this.hud.el.pos.textContent = this.hud.ordinal(localPos);
+          }
+          // lap from local state
+          const pst = this.race.kartState.get(this.playerKart.vehicle);
+          if (pst) {
+            const lapShown = Math.min(pst.lap + 1, pst.laps);
+            this.hud.el.lap.textContent = this.i18n.t('hud.lapFormat', { lap: lapShown, total: pst.laps });
+          }
+          this.hud.el.time.textContent = formatTime(snap.raceTime || this.onlineRaceTime);
+          this.hud.drawMinimap(this.race.karts, this.playerKart, null);
+          // speed
+          const kmh = Math.round(this.playerKart.vehicle.speedKmh);
+          this.hud.el.speedVal.textContent = String(kmh);
+        } else {
+          this.hud.updateRace(this.race);
+        }
+
+        const pv = this.playerKart.vehicle;
+        const racing = this.race.state === 'racing' || this.race.state === 'finished';
+        if (racing) {
+          this.audio.updateEngine(pv.speedAbs / CONFIG.vehicle.maxSpeed, playerInput.throttle, pv.boost.boosting);
+          if (pv.boost.boosting) this.camCtl.addTrauma(CONFIG.camera.boostShake * rawDt * 3);
+        } else {
+          this.audio.updateEngine(0, 0, false);
+        }
+
+        const pose = this.kartVisuals.get(pv)?.renderPose || null;
+        if (this.race.state === 'finished' || this.race.state === 'results') {
+          this.camCtl.updateCinematic(rawDt, pv, this.time, pose);
+        } else {
+          this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time, pose);
+        }
+        this.hud.setCinematic(this.race.state === 'finished');
+        this._finishCelebration(rawDt);
+
+        // if server says finished, show results
+        if (snap && snap.state === 'finished' && !this._onlineFinishedShown) {
+          // _onOnlineRaceFinished will be called via event, but as backup
+          if (this.race.state !== 'results') {
+            this.race.state = 'results';
+          }
+        }
+      }
+
+      if (this.race.state === 'results' && this._lastRaceState !== 'results') {
+        // online results already shown via snapshot, but keep hook
+        if (!this._onlineFinishedShown) this._onResultsShown();
+      }
+      this._lastRaceState = this.race.state;
+
     } else {
       // pause toggle
       if (this.input.wasPressed('pause')) this._handlePauseToggle();
@@ -1851,9 +2645,6 @@ class Game {
 
         const pose = this.kartVisuals.get(pv)?.renderPose || null;
         if (this.race.state === 'finished' || this.race.state === 'results') {
-          // Finish cinematic: scripted sweep instead of the chase cam. It keeps
-          // drifting slowly while the results card is up, so the card is
-          // revealed over a live background.
           this.camCtl.updateCinematic(rawDt, pv, this.time, pose);
         } else {
           this.camCtl.update(rawDt, pv, pv.boost.boosting, this.time, pose);
