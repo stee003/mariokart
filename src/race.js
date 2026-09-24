@@ -174,6 +174,13 @@ export class RaceManager {
     const v = kart.vehicle;
     const st = this.kartState.get(v);
     if (!v.surf || st.finished) { if (v.surf) st.prevProg = v.surf.progress; return; }
+    // A recovery is a teleport, not a forward checkpoint crossing. Rebase the
+    // previous progress during both the fall and the R-style freeze, without
+    // altering which checkpoint the lap still needs.
+    if (v.respawnPending > 0 || v.resetTimer > 0 || v.fx?.recovering) {
+      st.prevProg = v.surf.progress;
+      return;
+    }
 
     const L = this.track.L;
     const prog = v.surf.progress;
@@ -245,6 +252,10 @@ export class RaceManager {
     for (let i = 0; i < this.karts.length; i++) {
       for (let j = i + 1; j < this.karts.length; j++) {
         const a = this.karts[i].vehicle, b = this.karts[j].vehicle;
+        // A falling/rescued kart is intangible. Otherwise a car on the deck
+        // could still shove one below it (the old test used only X/Z).
+        if (a.resetTimer > 0 || b.resetTimer > 0 || a.respawnPending > 0 || b.respawnPending > 0 ||
+            a.fx?.recovering || b.fx?.recovering || Math.abs(a.y - b.y) > KART_HIT_TOP) continue;
         // phased (intangible) karts pass through everything
         if (this.itemsEnabled && (this.items.isIntangible(a) || this.items.isIntangible(b))) continue;
         const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
@@ -289,6 +300,7 @@ export class RaceManager {
     if (!colliders.length) return;
     for (const kart of this.karts) {
       const v = kart.vehicle;
+      if (v.resetTimer > 0 || v.respawnPending > 0 || v.fx?.recovering) continue;
       // The kart is a vertical cylinder spanning its visible chassis + pilot,
       // so hopping over a low obstacle now genuinely clears it.
       const y0 = v.y + KART_HIT_BOTTOM, y1 = v.y + KART_HIT_TOP;

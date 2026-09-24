@@ -40,6 +40,8 @@ export class CameraController {
 
   snapTo(vehicle) {
     this.cine = null;
+    this._poseRevision = vehicle.poseRevision;
+    this._hint = { main: -1, sc: -1 }; // do not search the old deck after a rescue
     this.yaw = vehicle.yaw;
     const back = this._back(_v1);
     this.pos.copy(vehicle.pos).addScaledVector(back, this.distance);
@@ -69,6 +71,9 @@ export class CameraController {
   // whenever the display rate differs, which reads as terrain jitter.
   // Omitting it falls back to the raw physics pose.
   update(dt, vehicle, boostActive, time, anchor = null) {
+    // The kart animator rebases its endpoints on teleport. Rebase the camera
+    // too, or the chase rig flies across the forest for several seconds.
+    if (this._poseRevision !== vehicle.poseRevision) this.snapTo(vehicle);
     const ax = anchor ? anchor.x : vehicle.pos.x;
     const ay = anchor ? anchor.y : vehicle.y;
     const az = anchor ? anchor.z : vehicle.pos.z;
@@ -164,6 +169,7 @@ export class CameraController {
 
   // `anchor` is the interpolated render pose, as in update().
   updateCinematic(dt, vehicle, time, anchor = null) {
+    if (this._poseRevision !== vehicle.poseRevision) this.snapTo(vehicle);
     if (!this.cine) this.beginCinematic();
     const c = this.cine;
     c.t += dt;

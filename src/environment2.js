@@ -8,13 +8,8 @@
 // tunnels, obstacle meshes) is theme-parameterized; props give each
 // environment its own silhouette and environmental storytelling.
 //
-// 2026 flagship pass: the desert / forest / city kits (used ONLY by
-// Ashfall Run, Verdant Loop, Neon Cascade and Skyline Helix) were rebuilt
-// with layered "road2" surfacing, richer skies (stars, sun/moon discs),
-// per-theme tunnel variants, denser hand-tuned prop sets and per-track
-// FLAVORS - signature landmarks (volcano, mega-tower, billboards, forest
-// landmarks) with their own animation hooks. Every other theme's kit and
-// prop set is byte-for-byte the previous release.
+// Bespoke worlds (including Verdant Loop's Lanternwood) opt in by track ID.
+// Other circuits continue using their existing themes and prop sets.
 // ============================================================================
 
 import * as THREE from '../lib/three.module.js';
@@ -22,6 +17,7 @@ import { createRampVisual } from './terrainMesh.js';
 import { OBSTACLE_PROFILE, flameHazardRadius } from './track.js';
 import { REFINEMENT_KITS, buildRefinedEnvironment } from './refinedEnvironment.js';
 import { EXPEDITION_KITS, buildExpeditionEnvironment } from './expeditionEnvironment.js';
+import { VERDANT_KIT, buildVerdantEnvironment } from './verdantEnvironment.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const yawFor = (dir) => Math.atan2(dir.x, dir.z);
@@ -1407,113 +1403,6 @@ const FLAVORS = {
     }
   },
 
-  // ---------------------------------------------------------- verdant_loop
-  verdant_loop(group, track, rnd, state, colliders) {
-    // giant landmark tree guarding the start
-    const tp = track.pointAt(track.L * 0.02);
-    const tPos = tp.pos.clone().addScaledVector(tp.right, -(tp.width / 2 + 15));
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4228, roughness: 1 });
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 3.2, 17, 8), trunkMat);
-    trunk.position.set(tPos.x, 8.5, tPos.z);
-    group.add(trunk);
-    const canopyCols = [0x2f7a3f, 0x3f8e4f, 0x57a85a];
-    const canopy = [[12, 8, 15], [8.5, 6.5, 20.5], [5.5, 5.5, 25]].map(([r, h, y], i) => {
-      const c = new THREE.Mesh(new THREE.ConeGeometry(r, h, 8),
-        new THREE.MeshStandardMaterial({ color: canopyCols[i], roughness: 1, flatShading: true }));
-      c.position.set(tPos.x, y, tPos.z);
-      group.add(c);
-      return c;
-    });
-    colliders.push(new THREE.Box3().setFromCenterAndSize(
-      new THREE.Vector3(tPos.x, 12, tPos.z), new THREE.Vector3(26, 30, 26)));
-    state.extras.push((dt, time) => {
-      // gentle breeze sway
-      for (let i = 0; i < canopy.length; i++) {
-        canopy[i].rotation.z = Math.sin(time * 0.8 + i) * 0.02 * (i + 1);
-      }
-    });
-
-    // sunlit pond with reeds
-    const pp = track.pointAt(track.L * 0.86);
-    const pond = pp.pos.clone().addScaledVector(pp.right, pp.width / 2 + 17);
-    const rim = new THREE.Mesh(new THREE.CircleGeometry(15, 20),
-      new THREE.MeshStandardMaterial({ color: 0xc8b080, roughness: 1 }));
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.set(pond.x, -0.38, pond.z);
-    group.add(rim);
-    const water = new THREE.Mesh(new THREE.CircleGeometry(13, 20),
-      new THREE.MeshStandardMaterial({ color: 0x4a90b8, roughness: 0.25, transparent: true, opacity: 0.88 }));
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(pond.x, -0.3, pond.z);
-    group.add(water);
-    const reedMat = new THREE.MeshStandardMaterial({ color: 0x4f8e4f, roughness: 1 });
-    for (let i = 0; i < 14; i++) {
-      const a = rnd() * Math.PI * 2;
-      const r = 11 + rnd() * 3.4;
-      const h = 1.6 + rnd() * 1.1;
-      const reed = new THREE.Mesh(new THREE.ConeGeometry(0.09, h, 4), reedMat);
-      reed.position.set(pond.x + Math.cos(a) * r, -0.3 + h / 2, pond.z + Math.sin(a) * r);
-      reed.rotation.z = (rnd() - 0.5) * 0.2;
-      group.add(reed);
-    }
-    const lilyMat = new THREE.MeshStandardMaterial({ color: 0x6aae5a, roughness: 0.9 });
-    for (let i = 0; i < 5; i++) {
-      const a = rnd() * Math.PI * 2;
-      const lily = new THREE.Mesh(new THREE.CircleGeometry(0.55, 8), lilyMat);
-      lily.rotation.x = -Math.PI / 2;
-      lily.position.set(pond.x + Math.cos(a) * (2 + rnd() * 7), -0.28, pond.z + Math.sin(a) * (2 + rnd() * 7));
-      group.add(lily);
-    }
-
-    // drifting fireflies
-    const N_FLY = 80;
-    const flyPos = new Float32Array(N_FLY * 3);
-    const flyBase = [];
-    for (let i = 0; i < N_FLY; i++) {
-      const s = rnd() * track.L;
-      const p = track.pointAt(s);
-      const side = rnd() > 0.5 ? 1 : -1;
-      const dist = p.width / 2 + 3 + rnd() * 13;
-      const x = p.pos.x + p.right.x * side * dist;
-      const y = p.pos.y + 0.8 + rnd() * 3.8;
-      const z = p.pos.z + p.right.z * side * dist;
-      flyPos[i * 3] = x; flyPos[i * 3 + 1] = y; flyPos[i * 3 + 2] = z;
-      flyBase.push({ x, y, z, ph: rnd() * 6, sp: 0.25 + rnd() * 0.4 });
-    }
-    const flyGeo = new THREE.BufferGeometry();
-    flyGeo.setAttribute('position', new THREE.BufferAttribute(flyPos, 3));
-    const flies = new THREE.Points(flyGeo, new THREE.PointsMaterial({
-      color: 0xd8ff8a, size: 0.5, sizeAttenuation: true,
-      transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    group.add(flies);
-    state.extras.push((dt, time) => {
-      const arr = flyGeo.attributes.position.array;
-      for (let i = 0; i < N_FLY; i++) {
-        const b = flyBase[i];
-        arr[i * 3] = b.x + Math.sin(time * b.sp + b.ph) * 1.8;
-        arr[i * 3 + 1] = b.y + Math.sin(time * b.sp * 1.6 + b.ph * 2) * 0.7;
-        arr[i * 3 + 2] = b.z + Math.cos(time * b.sp * 0.8 + b.ph) * 1.8;
-      }
-      flyGeo.attributes.position.needsUpdate = true;
-    });
-
-    // volumetric light shafts through the canopy
-    const shaftMat = new THREE.MeshBasicMaterial({
-      color: 0xfff8c0, transparent: true, opacity: 0.055,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-    });
-    for (let i = 0; i < 6; i++) {
-      const sp = track.pointAt(track.L * (0.02 + i * 0.012));
-      const shaft = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 34), shaftMat);
-      shaft.position.copy(sp.pos).addScaledVector(sp.right, (rnd() - 0.5) * sp.width);
-      shaft.position.y += 15;
-      shaft.rotation.y = yawFor(sp.dir) + (rnd() - 0.5) * 0.6;
-      shaft.rotation.z = 0.45;
-      group.add(shaft);
-    }
-  },
-
   // ---------------------------------------------------------- neon_cascade
   neon_cascade(group, track, rnd, state, colliders) {
     // neon billboards marching along the rooftops
@@ -1696,7 +1585,8 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   const theme = track.def.theme;
   const expedition = EXPEDITION_KITS[track.def.id];
   const refinement = REFINEMENT_KITS[track.def.id];
-  const bespoke = expedition || refinement;
+  const verdant = track.id === 'verdant_loop';
+  const bespoke = expedition || refinement || (verdant && VERDANT_KIT);
   const kit = bespoke || KITS[theme] || KITS.ruins;
   const group = new THREE.Group();
   const colliders = [];
@@ -1733,9 +1623,10 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   const rnd = seeded(track.def.musicSeed * 1013 + 7);
   if (expedition) buildExpeditionEnvironment(group, track, rnd, state, colliders);
   else if (refinement) buildRefinedEnvironment(group, track, rnd, state, colliders);
+  else if (verdant) buildVerdantEnvironment(group, track, rnd, state, colliders);
   else (PROPS[theme] || PROPS.ruins)(group, track, rnd);
 
-  // signature landmarks for the four flagship themed circuits
+  // signature landmarks for the remaining flagship themed circuits
   const flavor = FLAVORS[track.def.id];
   if (flavor) flavor(group, track, rnd, state, colliders);
 

@@ -2847,9 +2847,43 @@ class Game {
         }
       }
 
-      // === Sunforge water physics: puddle splash, realistic drag & ripples ===
+      // Water: Verdant's contact/drag is integrated by VehicleController at
+      // 60 Hz. Render frames only generate wheel spray and bounded ripples;
+      // legacy worlds keep their existing visual-only puddle handling.
       if (this.env?.state?.puddles?.length) {
         for (const pud of this.env.state.puddles) {
+          if (pud.stepped) {
+            if (v.waterSurface !== pud.surface || v.waterDepth < .08 || !v.grounded) continue;
+            const intensity = Math.min(1, v.speedAbs / 24) * v.waterDepth;
+            if (intensity < .1) continue;
+            // Spray travels behind the two rear tyres, not radially out of a
+            // single point. Emission is seconds-based, not frames-based.
+            v._waterSpray = (v._waterSpray || 0) + dt * (6 + 24 * intensity);
+            const count = Math.min(5, Math.floor(v._waterSpray));
+            v._waterSpray -= count;
+            const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+            const rx = Math.cos(v.yaw), rz = -Math.sin(v.yaw);
+            for (let i = 0; i < count; i++) {
+              const side = i % 2 ? 1 : -1;
+              const x = v.pos.x - fx * 1.05 + rx * side * .72;
+              const z = v.pos.z - fz * 1.05 + rz * side * .72;
+              this.dust.spawn(_pp.set(x, v.surf.y + .19, z), _pv.set(
+                -fx * (2 + v.speedAbs * .24) + rx * side * (2 + Math.random()),
+                1.4 + Math.random() * 2.2 * intensity,
+                -fz * (2 + v.speedAbs * .24) + rz * side * (2 + Math.random()),
+              ), { color: i % 3 ? 0xb5e7d9 : 0xecf8d8, size: .32 + .24 * intensity,
+                life: .43, growth: .55, gravity: 6, drag: 2.2 });
+            }
+            if (this.time - (v._lastPuddleRipple || 0) > .14) {
+              v._lastPuddleRipple = this.time;
+              for (const side of [-1, 1]) {
+                this.env.state.spawnPuddleRipple(_pp.set(
+                  v.pos.x - fx * .8 + rx * side * .65, v.surf.y,
+                  v.pos.z - fz * .8 + rz * side * .65), v.speedAbs);
+              }
+            }
+            continue;
+          }
           const dx = v.pos.x - pud.center.x;
           const dz = v.pos.z - pud.center.z;
           const distSq = dx*dx + dz*dz;

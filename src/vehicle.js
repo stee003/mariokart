@@ -9,6 +9,7 @@ import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
 import { DriftSystem } from './drift.js';
 import { BoostSystem } from './boost.js';
+import { waterCoverage } from './water.js';
 
 export class VehicleController {
   // `params` overrides CONFIG.vehicle per-kart (stat-based loadouts);
@@ -47,6 +48,10 @@ export class VehicleController {
     // after a short, readable delay instead of snapping mid-air.
     this.respawnPending = 0;
     this.respawnReason = null;
+    this.rescueProgress = null;    // frozen before the off-road query can jump legs
+    this.lastSafeProgress = null;  // last grounded point actually on the road
+    this.waterDepth = 0;
+    this.waterSurface = null;
 
     this.trick = { active: false, t: 0, landed: false };
     this.airTime = 0;
@@ -60,6 +65,7 @@ export class VehicleController {
     this.terrainRoll = 0;       // rad, positive = right side down
     this.suspension = 0;        // 0..1 compression from the last impact
     this.stepId = 0;            // physics steps taken (render interpolation)
+    this.poseRevision = 0;      // incremented by teleports; never interpolate them
 
     this.mods = null;                      // per-frame item-system modifiers
     this.fx = {};                          // per-frame FX event flags
@@ -74,6 +80,7 @@ export class VehicleController {
     this.vy = 0;
     this.grounded = true;
     this.fSpeed = 0;
+    this.latSpeed = 0;
     this.steer = 0;
     this.hint = { main: -1, sc: -1 };
     this.surf = this.track.surface(this.pos, this.hint);
@@ -89,7 +96,17 @@ export class VehicleController {
     this.stuckTimer = 0;
     this.respawnPending = 0;
     this.respawnReason = null;
+    this.rescueProgress = null;
+    this.lastSafeProgress = this.surf.progress;
+    this.padTimer = 0;
+    this.waterDepth = 0;
+    this.waterSurface = null;
+    this.pendingFx = {};
+    this.fx = {};
+    this._spinT = 0;
+    this.poseRevision++;
     this.trick.active = false;
+    this.trick.landed = false;
     this.airTime = 0;
     this.climbRate = 0;
     this.lastFallSpeed = 0;
@@ -109,8 +126,15 @@ export class VehicleController {
   // stall against an obstacle can ask for a side so the kart does not reappear
   // in the exact spot that trapped it.
   doReset(reason = 'offtrack', lateral = 0) {
-    const prog = ((this.surf ? this.surf.progress : 0) - 4 + this.track.L) % this.track.L;
-    const width = this.surf ? this.surf.width : 12;
+    // When falling, the nearest-road query can switch to a different leg or
+    // the shortcut. Never reset to THAT projection: use the last contact with
+    // the real road, frozen when the rescue was queued. Manual R shares this
+    // exact same placement and clean-state path.
+    const current = this.surf && (this.surf.onRoad || this.surf.onShoulder)
+      ? this.surf.progress : null;
+    const anchor = this.rescueProgress ?? current ?? this.lastSafeProgress ?? this.surf?.progress ?? 0;
+    const prog = ((anchor - 4) % this.track.L + this.track.L) % this.track.L;
+    const width = this.track.pointAt(prog).width;
     const lim = Math.max(0, width / 2 - 1.4);
     const lat = Math.max(-lim, Math.min(lim, lateral || 0));
     const slot = this.track.placeAt(prog, lat);
@@ -121,11 +145,20 @@ export class VehicleController {
     this.offTrackTimer = 0;
     this.stuckTimer = 0;
     this.fx.reset = reason;
+    // AI/manual resets can happen before step(); in-step rescues already have
+    // a live fx event and must not replay it again on the next physics tick.
+    if (!this._inStep) this.pendingFx.reset = reason;
   }
 
   // ------------------------------------------------------------------ step
   // input: {throttle, brake, steer, drift, trick}
   step(dt, input, locked = false) {
+    this._inStep = true;
+    try { return this._integrate(dt, input, locked); }
+    finally { this._inStep = false; }
+  }
+
+  _integrate(dt, input, locked) {
     // Monotonic step counter. Renderers use it to latch the previous pose
     // exactly once per physics step so they can interpolate between steps.
     this.stepId++;
@@ -134,7 +167,8 @@ export class VehicleController {
     const track = this.track;
 
     if (this.resetTimer > 0) {
-      this.resetTimer -= dt;
+      this.resetTimer = Math.max(0, this.resetTimer - dt);
+      this.fx.recovering = true; // also protects the very last frozen tick
       this.surf = track.surface(this.pos, this.hint);
       this.y = this.surf.y;
       this.pos.y = this.y;
@@ -142,23 +176,17 @@ export class VehicleController {
       return;
     }
 
-    // Queued elevated/edge respawn: same path as pressing R, after a short
-    // pause. This is the user-visible \"fell off the bridge\" behaviour and
-    // must stay smooth: damp the motion while waiting so the kart doesn't
-    // rocket off into the void or jitter on the deck edge. While pending we
-    // still run the normal terrain integration so y stays continuous and the
-    // regression suite never sees a teleport.
+    // A brief fall remains visible instead of teleporting on edge contact.
+    // Release the controls and drift/boost, but do NOT damp vertical velocity:
+    // gravity should look and behave like a fall, even at different frame rates.
     if (this.respawnPending > 0) {
       this.respawnPending -= dt;
-      // Gentle auto-brake while counting down
-      this.vel.multiplyScalar(Math.max(0, 1 - 1.6 * dt));
-      this.vy *= Math.max(0, 1 - 1.2 * dt);
       if (this.respawnPending <= 0) {
         this.doReset(this.respawnReason || 'offtrack');
         return;
       }
-      // keep off-track logic suppressed while the queued reset ticks down
-      // (but still let the normal physics run so y remains continuous)
+      this.vel.multiplyScalar(Math.exp(-1.6 * dt));
+      locked = true;
     }
 
     if (locked) input = { throttle: 0, brake: 0, steer: 0, drift: false, trick: false };
@@ -198,6 +226,22 @@ export class VehicleController {
       const cap = this.params.offTrackMaxSpeed;
       if (fSpeed > cap) fSpeed -= (fSpeed - cap) * 3.0 * dt;
       fSpeed *= Math.exp(-this.params.offTrackDrag * (onShoulder ? 0.25 : 1) * dt);
+    }
+
+    // Shallow water is a fixed-step contact, not a render-frame impulse.
+    // Entry fades through the visible irregular shore; drag scales with
+    // speed, while wet tires retain enough grip to drive the racing line.
+    this.waterDepth = 0;
+    this.waterSurface = null;
+    if (this.grounded && onRoad && Math.abs(this.y - prevSurf.y) < 0.45) {
+      for (const pool of track.waterSurfaces) {
+        const depth = waterCoverage(pool, this.pos);
+        if (depth > this.waterDepth) { this.waterDepth = depth; this.waterSurface = pool; }
+      }
+    }
+    if (this.waterDepth > 0) {
+      fSpeed *= Math.exp(-this.waterDepth * (0.12 + 0.017 * Math.abs(fSpeed)) * dt);
+      latSpeed *= Math.exp(-this.waterDepth * 0.35 * dt);
     }
 
     // --- steering ---------------------------------------------------------
@@ -253,6 +297,7 @@ export class VehicleController {
     if (drifting) grip *= this.driftMods?.gripMult ?? CONFIG.drift.gripMult;
     const zoneFx = prevSurf.fx;
     if (zoneFx && zoneFx.gripMult !== 1) grip *= zoneFx.gripMult;   // slippery track zones
+    grip *= 1 - 0.25 * this.waterDepth;
     latSpeed *= Math.exp(-grip * dt);
 
     // --- integrate horizontal ----------------------------------------------
@@ -280,7 +325,15 @@ export class VehicleController {
     this.pos.y = this.y;
     const surf = track.surface(this.pos, this.hint, this.vel);
     this.surf = surf;
-    const groundY = surf.y;
+    const Rcfg = CONFIG.recovery;
+    const lateralBeyond = Math.abs(surf.lateral) - surf.width / 2;
+    // surface() projects the nearest road height even metres past its edge.
+    // On Verdant's raised timber sections that projection is NOT a floor:
+    // outside the visible apron the kart drops to the forest ground below.
+    const unsupported = track.recoveryFloorY !== null && !surf.onRoad &&
+      lateralBeyond > Rcfg.deckOverhang &&
+      surf.y - track.recoveryFloorY > Rcfg.elevatedRoadHeight;
+    const groundY = unsupported ? track.recoveryFloorY : surf.y;
     const T = CONFIG.terrain;
     // Horizontal distance covered this step (floored so a stationary kart
     // still settles onto the ground instead of hovering above it).
@@ -425,7 +478,7 @@ export class VehicleController {
 
     // --- boost pads -----------------------------------------------------------
     this.padTimer = Math.max(0, this.padTimer - dt);
-    if (this.grounded && this.padTimer <= 0) {
+    if (this.respawnPending <= 0 && this.grounded && this.padTimer <= 0) {
       const pad = track.padAt(surf.progress, surf.lateral, this.pos);
       if (pad) {
         this.padTimer = 1.0;
@@ -434,39 +487,50 @@ export class VehicleController {
       }
     }
 
-    // --- recovery / stuck detection (elevated-aware) ------------------------
-    // Shoulders count as "still racing" (curb/grass drag penalises enough);
-    // matches the AI's own off-course definition. Elevated falls and far
-    // off-track now QUEUE the same reset the R key triggers, after a short,
-    // readable delay instead of snapping mid-air.
-    if (onRoad || surf.onShoulder || this.resetTimer > 0) {
+    // --- recovery / stuck detection -----------------------------------------
+    // Only a grounded road contact is a safe anchor. A nearest-sample query
+    // beyond a raised edge can switch legs while the kart is falling; never
+    // let that projection choose a respawn position or award a checkpoint.
+    if (this.grounded && surf.onRoad && Math.abs(this.y - surf.y) < .45 &&
+        this.respawnPending <= 0) this.lastSafeProgress = surf.progress;
+    if (surf.onRoad || surf.onShoulder) this.offTrackTimer = 0;
+    else this.offTrackTimer += dt;
+
+    // If a genuine jump returned to the road BEFORE the rescue fired, it was
+    // a save, not a fall. Otherwise the fall keeps its frozen safe anchor.
+    if (this.respawnPending > 0 && this.grounded && surf.onRoad &&
+        Math.abs(this.y - surf.y) < .3) {
+      this.respawnPending = 0;
+      this.respawnReason = null;
+      this.rescueProgress = null;
       this.offTrackTimer = 0;
-    } else {
-      this.offTrackTimer += dt;
+      this.lastSafeProgress = surf.progress;
     }
-    const Rcfg = CONFIG.recovery;
-    const lateralBeyond = Math.abs(surf.lateral) - surf.width / 2;
     const hardOut = lateralBeyond > Rcfg.hardLimitLateral;
     const fell = this.y < surf.y - Rcfg.fallHeight;
-    const airborneOff = !this.grounded && !onRoad && !surf.onShoulder && lateralBeyond > 2;
-    if (this.respawnPending <= 0 && (hardOut || fell || airborneOff)) {
-      const delay = (fell || airborneOff) ? Rcfg.elevatedDelay : Rcfg.hardOffDelay;
-      this.respawnPending = delay;
-      this.respawnReason = fell ? 'fall' : 'offtrack';
-      // don't return immediately - let this frame's physics finish so y stays continuous;
-      // the pending countdown will fire the actual reset after the short delay.
+    const airborneOff = !this.grounded && !surf.onRoad && !surf.onShoulder &&
+      lateralBeyond > Rcfg.deckOverhang;
+    if (this.respawnPending <= 0 && (unsupported || fell || hardOut || airborneOff)) {
+      this.respawnPending = (unsupported || fell || airborneOff)
+        ? Rcfg.elevatedDelay : Rcfg.hardOffDelay;
+      this.respawnReason = (unsupported || fell) ? 'fall' : 'offtrack';
+      this.rescueProgress = this.lastSafeProgress ?? prevSurf.progress;
+      this.drift.cancel();
+      this.boost.cancel();
+      this.trick.active = false;
+      this.trick.landed = false;
     }
     if (this.respawnPending > 0) {
-      // suppress other recovery while queued
       this.offTrackTimer = 0;
       this.stuckTimer = 0;
     } else if (this.offTrackTimer > Rcfg.offTrackLimit) {
       this.doReset('offtrack');
       return;
     }
-    if (this.respawnPending <= 0 && onRoad && input.throttle > 0 && Math.abs(fSpeed) < CONFIG.recovery.stuckSpeed && !b.active) {
+    if (this.respawnPending <= 0 && surf.onRoad && input.throttle > 0 &&
+        Math.abs(fSpeed) < Rcfg.stuckSpeed && !b.active) {
       this.stuckTimer += dt;
-      if (this.stuckTimer > CONFIG.recovery.stuckTime) { this.doReset('stuck'); return; }
+      if (this.stuckTimer > Rcfg.stuckTime) { this.doReset('stuck'); return; }
     } else {
       this.stuckTimer = 0;
     }
