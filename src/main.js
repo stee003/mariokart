@@ -435,12 +435,20 @@ class Game {
     $('lang-it').addEventListener('click', () => { this.audio.init(); this.i18n.setLanguage('it'); this.audio.click(); syncLang(); this._refreshLists(); this._refreshOptionGroups(); });
     syncLang();
 
-    // sliders
+    // sliders: value + a "--fill" paint for the track portion (UI refresh)
+    const paintSlider = (el) => {
+      const min = parseFloat(el.min || 0), max = parseFloat(el.max || 100);
+      const pct = ((parseFloat(el.value) - min) / (max - min)) * 100;
+      el.style.setProperty('--fill', `${pct}%`);
+    };
+    const sliders = ['cam-dist', 'cam-height', 'volume', 'engine-volume', 'music-volume'].map($);
+    for (const s of sliders) s.addEventListener('input', () => paintSlider(s));
     $('cam-dist').value = this.camCtl.distance;
     $('cam-height').value = this.camCtl.height;
     $('volume').value = this.save.get('volume', 0.8);
     $('engine-volume').value = this.save.get('engineVolume', ENGINE_VOLUME_DEFAULT);
     $('music-volume').value = this.save.get('musicVolume', 0.55);
+    sliders.forEach(paintSlider);
     $('cam-dist').addEventListener('input', (e) => {
       const v = parseFloat(e.target.value);
       CONFIG.camera.distance = v;
@@ -831,14 +839,27 @@ class Game {
     return trophyAtLeast(have, cup.unlock.minTrophy);
   }
 
+  // One accent per biome, reused by the track-list row dots and the preview
+  // pane so a player learns the palette as a navigation cue.
+  static TRACK_THEME_COLORS = {
+    desert: '#ffb347', forest: '#8fe07a', city: '#41d8f0', mountain: '#ffd27a',
+    volcano: '#ff6a2a', underwater: '#40f0e0', factory: '#ffe14a', islands: '#7ac8ff',
+    ruins: '#ffd9a0', storm: '#b8c4ff', crystal: '#c8a8ff', space: '#66e8ff',
+  };
+
   _renderTrackList() {
     const list = document.getElementById('track-list');
     list.innerHTML = '';
     const rows = [];
-    for (const def of TRACK_DEFS) {
+    TRACK_DEFS.forEach((def, ti) => {
       const btn = document.createElement('button');
       btn.className = 'btn list-row';
+      btn.style.setProperty('--row-accent', App.TRACK_THEME_COLORS[def.theme] || '#ffb347');
+      const idx = document.createElement('span');
+      idx.className = 'row-index';
+      idx.textContent = String(ti + 1).padStart(2, '0');
       const name = document.createElement('span');
+      name.className = 'row-name';
       name.textContent = this.i18n.t(def.nameKey);
       const meta = document.createElement('span');
       meta.className = 'list-meta';
@@ -2393,6 +2414,19 @@ class Game {
         ), { color: Math.random() > 0.4 ? 0xffc46a : 0xfff3d0, size: 0.32, life: 0.3 + Math.random() * 0.25, gravity: 9, drag: 2 });
       }
       this.camCtl.addTrauma(CONFIG.camera.collisionShake * Math.min(1.5, payload.strength));
+    } else if (type === 'railHit') {
+      // guard-rail scrape: sparks streaming off the contact point along the wall
+      const n = Math.min(14, Math.floor(3 + payload.strength));
+      for (let i = 0; i < n; i++) {
+        this.sparks.spawn(payload.pos, _pv.set(
+          payload.nx * (1.5 + Math.random() * 3.5) + (Math.random() - 0.5) * 5,
+          Math.random() * 3.2 + 0.6,
+          payload.nz * (1.5 + Math.random() * 3.5) + (Math.random() - 0.5) * 5,
+        ), { color: Math.random() > 0.45 ? 0xffe9a8 : 0xffb45e, size: 0.24, life: 0.22 + Math.random() * 0.2, gravity: 11, drag: 1.6 });
+      }
+      if (payload.kart?.isPlayer) {
+        this.camCtl.addTrauma(CONFIG.camera.collisionShake * Math.min(0.85, payload.strength * 0.09));
+      }
     } else if (type === 'celebrate') {
       // Confetti is staged across the whole cinematic instead of dumped in one
       // lump at the crossing - see _finishCelebration().
@@ -3233,6 +3267,7 @@ function disposeTree(root) {
   const seenGeo = new Set();
   const seenMat = new Set();
   root.traverse((o) => {
+    if (o.isInstancedMesh) o.dispose();   // frees the instanceMatrix buffer
     if (o.geometry && !seenGeo.has(o.geometry)) {
       seenGeo.add(o.geometry);
       o.geometry.dispose();

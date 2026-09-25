@@ -171,6 +171,7 @@ for (const def of TRACK_DEFS) {
   let bigJumps = 0, microAir = 0, airRun = 0, groundedSurfJumps = 0;
   let prevY = v.y, prevGrounded = true, prevSurfY = v.surf ? v.surf.y : v.y;
   let prevOnSc = v.surf?.useShortcut, prevProg = v.surf?.progress ?? 0;
+  let prevLat = v.surf?.lateral ?? 0;
   let badAttitude = 0;
   const STEPS = 60 * 90;
 
@@ -181,6 +182,7 @@ for (const def of TRACK_DEFS) {
     if (v.resetTimer > 0) {
       prevY = v.y; prevGrounded = v.grounded; prevSurfY = v.surf?.y ?? v.y;
       prevOnSc = v.surf?.useShortcut; prevProg = v.surf?.progress ?? prevProg;
+      prevLat = v.surf?.lateral ?? prevLat;
       continue;
     }
 
@@ -191,9 +193,15 @@ for (const def of TRACK_DEFS) {
     // legitimately swaps deck (crossing a shortcut mouth, or the overlapping
     // decks of a helix). Those report a different surface by definition; what
     // matters is that the kart itself is re-seated smoothly, which the check
-    // above already asserts.
+    // above already asserts. A lateral re-seat counts too: when a kart cuts
+    // deep inside a hairpin, the surface match eventually releases the
+    // trailing leg and re-attaches metres to the side - reported lateral
+    // changes by half a road in one step, which can step the ramp feather
+    // edge (and with it the reported ground) even though the kart's own
+    // altitude still follows continuously.
     const deckSwap = v.surf?.useShortcut !== prevOnSc
-      || Math.abs((v.surf?.progress ?? 0) - prevProg) > 8;
+      || Math.abs((v.surf?.progress ?? 0) - prevProg) > 8
+      || Math.abs((v.surf?.lateral ?? 0) - prevLat) > 4;
     if (v.grounded && prevGrounded && v.surf && !deckSwap &&
         Math.abs(v.surf.y - prevSurfY) > 0.5) groundedSurfJumps++;
     // "micro air": airborne for only a frame or two = bump chatter
@@ -206,6 +214,7 @@ for (const def of TRACK_DEFS) {
 
     prevY = v.y; prevGrounded = v.grounded; prevSurfY = v.surf?.y ?? prevSurfY;
     prevOnSc = v.surf?.useShortcut; prevProg = v.surf?.progress ?? prevProg;
+    prevLat = v.surf?.lateral ?? prevLat;
   }
   // multi-deck circuits may re-seat once or twice per lap at a chute mouth
   check(`${def.id}: no kart-altitude teleports while grounded`, bigJumps <= 1, `jumps=${bigJumps}`);

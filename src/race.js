@@ -381,6 +381,15 @@ export class RaceManager {
     if (fx.pad && (kart.isPlayer || nearPlayer)) this.audio.pad();
     if (fx.boostStart && (kart.isPlayer || nearPlayer)) this.audio.boost(fx.boostStart.level + 1);
     if (fx.driftLevel && kart.isPlayer) this.audio.driftLevelUp(fx.driftLevel);
+    if (fx.railHit && (kart.isPlayer || nearPlayer)) {
+      this.audio.collision(Math.min(1.3, 0.35 + fx.railHit * 0.09));
+      this.onEvent && this.onEvent('railHit', {
+        vehicle: v, kart,
+        pos: _mid.set(v.pos.x, v.y + 0.55, v.pos.z),
+        nx: v._railHitNx ?? 0, nz: v._railHitNz ?? 0,
+        strength: fx.railHit,
+      });
+    }
     if (fx.reset) {
       this.audio.reset();
       // Checkpoint state is intentionally left untouched on resets:

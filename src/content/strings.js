@@ -293,6 +293,11 @@ export const CONTENT_STRINGS = {
 
   // ---------------- modes & flow ----------------
   'menu.quick': { en: 'Quick Race', it: 'Gara Rapida' },
+  'menu.quickHint': { en: 'One race, any track, up to 8 karts', it: 'Una gara, qualsiasi pista, fino a 8 kart' },
+  'menu.gpHint': { en: 'Four-track cup, points decide', it: 'Coppa di quattro piste, contano i punti' },
+  'menu.ttHint': { en: 'Chase the clock, beat the ghost', it: 'Sfida il cronometro, batti il ghost' },
+  'menu.battleHint': { en: 'Arena combat, last one floating', it: 'Combattimento nell\u2019arena' },
+  'menu.onlineHint': { en: 'Race friends around the world', it: 'Sfida amici in tutto il mondo' },
   'menu.grandprix': { en: 'Grand Prix', it: 'Gran Premio' },
   'menu.timetrial': { en: 'Time Trial', it: 'Prova a Tempo' },
   'menu.battle': { en: 'Battle Mode', it: 'Modalit\u00e0 Battaglia' },

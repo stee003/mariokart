@@ -2135,3 +2135,589 @@ body.mobile-device input[type="range"] { width: min(200px, 54vw); }
 @supports (height: 100dvh) {
   html, body { height: 100dvh; }
 }
+
+/* ============================================================================
+   UI REFRESH 2026 — layered on top of the base system so the older fallbacks
+   still work. Goals:
+     - consistent spacing/typography scale across every screen
+     - tactile buttons with real hover/press feedback
+     - mode select as visual cards with icons instead of text rows
+     - a HUD that reads at a glance (rank-coloured position, gauge speed)
+     - calmer, richer glass panels with depth, and smooth staggered entries
+   ========================================================================== */
+
+:root {
+  /* refined depth tokens */
+  --depth-1: 0 2px 6px rgba(0, 0, 0, 0.30);
+  --depth-2: 0 10px 28px rgba(0, 0, 0, 0.42);
+  --depth-3: 0 26px 70px rgba(0, 0, 0, 0.58), 0 2px 0 rgba(255, 226, 187, 0.06) inset;
+  --glow-sun: 0 0 18px rgba(255, 179, 71, 0.45);
+  --glow-teal: 0 0 16px rgba(47, 216, 200, 0.38);
+  --ease-spring: cubic-bezier(0.22, 1.24, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 0.9, 0.24, 1);
+}
+
+/* ----------------------------------------------------------------------------
+   BUTTONS — chunkier, layered, satisfying. The press state now actually sinks.
+   -------------------------------------------------------------------------- */
+.btn {
+  border-radius: var(--radius-btn);
+  border: 1px solid rgba(255, 186, 108, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 220, 170, 0.055), transparent 42%),
+    linear-gradient(180deg, rgba(74, 42, 21, 0.82), rgba(33, 19, 10, 0.88));
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.07) inset,
+    0 12px 24px rgba(0, 0, 0, 0.30),
+    0 2px 6px rgba(0, 0, 0, 0.22);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  transition: transform 0.07s var(--ease-out), background 0.15s ease,
+              border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease,
+              filter 0.15s ease;
+}
+.btn:hover {
+  background:
+    linear-gradient(180deg, rgba(255, 220, 170, 0.10), transparent 46%),
+    linear-gradient(180deg, rgba(102, 58, 28, 0.9), rgba(50, 29, 15, 0.92));
+  border-color: rgba(255, 205, 140, 0.62);
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.09) inset,
+    0 16px 34px rgba(0, 0, 0, 0.36),
+    0 0 22px rgba(255, 179, 71, 0.16);
+  transform: translateY(-2px);
+  filter: brightness(1.07);
+}
+.btn:active {
+  transform: translateY(1px) scale(0.992);
+  box-shadow:
+    0 1px 0 rgba(255, 236, 205, 0.05) inset,
+    0 4px 10px rgba(0, 0, 0, 0.30);
+  filter: brightness(0.96);
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: saturate(0.4); }
+.btn:disabled:hover { transform: none; box-shadow: none; }
+
+.btn-primary {
+  border-color: rgba(255, 232, 190, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 46%),
+    linear-gradient(180deg, #ffc25e 4%, #ff9a2f 46%, #e05d17 100%);
+  color: #38190a;
+  text-shadow: 0 1px 0 rgba(255, 240, 210, 0.55);
+  box-shadow:
+    0 3px 0 rgba(255, 244, 220, 0.4) inset,
+    0 -3px 0 rgba(120, 40, 4, 0.35) inset,
+    0 14px 30px rgba(220, 90, 16, 0.42),
+    0 2px 8px rgba(0, 0, 0, 0.30);
+}
+.btn-primary:hover {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 48%),
+    linear-gradient(180deg, #ffd98d 4%, #ffae44 46%, #f07122 100%);
+  border-color: #fff0d0;
+  box-shadow:
+    0 3px 0 rgba(255, 250, 235, 0.5) inset,
+    0 -3px 0 rgba(120, 40, 4, 0.3) inset,
+    0 18px 42px rgba(230, 100, 20, 0.5),
+    0 0 30px rgba(255, 190, 90, 0.25);
+}
+.btn-primary:active {
+  box-shadow:
+    0 1px 0 rgba(255, 244, 220, 0.35) inset,
+    0 -1px 0 rgba(120, 40, 4, 0.3) inset,
+    0 6px 16px rgba(220, 90, 16, 0.35);
+}
+
+.btn.selected {
+  border-color: #4ef0dd;
+  background:
+    linear-gradient(180deg, rgba(94, 255, 232, 0.16), transparent 55%),
+    linear-gradient(180deg, rgba(26, 88, 80, 0.92), rgba(13, 50, 45, 0.94));
+  color: #eafffb;
+  box-shadow:
+    0 2px 0 rgba(160, 255, 240, 0.22) inset,
+    0 0 0 1px rgba(47, 216, 200, 0.5),
+    0 0 24px rgba(47, 216, 200, 0.22),
+    0 10px 26px rgba(0, 0, 0, 0.30);
+  text-shadow: 0 1px 2px rgba(0, 20, 18, 0.8);
+}
+
+/* ----------------------------------------------------------------------------
+   SCREENS & CARDS — deeper glass, backdrop vignette, staggered entry motion.
+   -------------------------------------------------------------------------- */
+.screen {
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 145, 54, 0.13), transparent 36%),
+    radial-gradient(circle at 80% 82%, rgba(47, 216, 200, 0.10), transparent 32%),
+    radial-gradient(ellipse at 50% 26%, rgba(64, 30, 10, 0.48), rgba(8, 4, 2, 0.88));
+}
+.screen:not(.hidden) { animation: screenFade 0.3s var(--ease-out); }
+@keyframes screenFade {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(3px); }
+  to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
+.menu-card {
+  box-shadow: var(--depth-3), 0 0 0 1px rgba(255, 214, 150, 0.05),
+              0 0 60px rgba(255, 150, 50, 0.05);
+}
+.menu-card h2 {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 24px;
+  padding-bottom: 10px;
+}
+.menu-card h2::after {
+  content: '';
+  position: absolute; left: 50%; bottom: 0;
+  width: 64px; height: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--sun-2), var(--sun-1), var(--sun-2), transparent);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.55);
+}
+
+/* staggered rise for direct children of any card */
+.screen:not(.hidden) .menu-card:not(.results-card) > * {
+  animation: cardChildIn 0.42s var(--ease-out) backwards;
+}
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(1) { animation-delay: 0.03s; }
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(2) { animation-delay: 0.07s; }
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(3) { animation-delay: 0.11s; }
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(4) { animation-delay: 0.15s; }
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(5) { animation-delay: 0.18s; }
+.screen:not(.hidden) .menu-card:not(.results-card) > *:nth-child(n+6) { animation-delay: 0.21s; }
+@keyframes cardChildIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reduce-fx .screen:not(.hidden) { animation: none; }
+.reduce-fx .screen:not(.hidden) .menu-card:not(.results-card) > * { animation: none; }
+
+/* ----------------------------------------------------------------------------
+   MODE SELECT — visual cards in a 2-wide grid.
+   -------------------------------------------------------------------------- */
+.mode-card-panel { min-width: 460px; max-width: 640px; }
+.mode-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.mode-card {
+  display: grid !important;
+  grid-template-columns: 44px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 16px !important;
+  min-height: 76px;
+  text-align: left;
+  border-radius: 16px;
+}
+.mode-icon {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  background: rgba(56, 22, 6, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 3px 8px rgba(0, 0, 0, 0.22);
+  color: inherit;
+}
+.mode-icon svg { width: 26px; height: 26px; display: block; }
+.mode-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mode-title {
+  font-size: 17px; font-weight: 800; letter-spacing: 0.3px; line-height: 1.15;
+}
+.mode-hint {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.15px; line-height: 1.3;
+  opacity: 0.72;
+}
+.mode-arrow {
+  font-size: 26px; font-weight: 400;
+  opacity: 0.55;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  justify-self: end;
+}
+.mode-card:hover .mode-arrow, .mode-card:focus-visible .mode-arrow,
+.mode-card.pad-focus .mode-arrow { transform: translateX(4px); opacity: 1; }
+.mode-grid .mode-back { grid-column: 1 / -1; }
+@media (max-width: 620px) {
+  .mode-grid { grid-template-columns: 1fr; }
+  .mode-card { min-height: 64px; }
+  .mode-card-panel { min-width: 0; }
+}
+
+/* ----------------------------------------------------------------------------
+   SETTINGS — section headers + calmer rows + segmented toggles.
+   -------------------------------------------------------------------------- */
+.settings-card { min-width: 480px; }
+.settings-section {
+  display: flex; align-items: center; gap: 10px;
+  margin: 22px 0 10px;
+  color: var(--teal-soft);
+  font-size: 11px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase;
+}
+.settings-section::before {
+  content: ''; width: 8px; height: 8px; flex: none;
+  transform: rotate(45deg);
+  background: var(--teal);
+  box-shadow: 0 0 10px rgba(47, 216, 200, 0.65);
+}
+.settings-section::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(47, 216, 200, 0.35), transparent 85%);
+}
+.settings-card .setting-row {
+  margin: 7px 0;
+  padding: 10px 14px;
+  background: rgba(14, 8, 5, 0.5);
+  border: 1px solid rgba(255, 178, 96, 0.09);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.settings-card .setting-row:hover {
+  border-color: rgba(255, 178, 96, 0.22);
+  background: rgba(24, 14, 8, 0.55);
+}
+.settings-card .setting-row label { font-size: 15px; }
+
+/* sliders get a filled track and a meatier thumb */
+input[type="range"] {
+  height: 8px;
+  background:
+    linear-gradient(90deg, var(--sun-2), var(--sun-3)) 0/var(--fill, 50%) 100% no-repeat,
+    rgba(20, 12, 7, 0.9);
+  border: 1px solid rgba(255, 190, 120, 0.25);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+input[type="range"]::-webkit-slider-thumb {
+  width: 20px; height: 20px;
+  background: radial-gradient(circle at 34% 32%, #fff6de, var(--sun-2) 55%, var(--sun-4));
+  border: 2px solid #fff2d8;
+  box-shadow: 0 0 12px rgba(255, 170, 70, 0.6), 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+input[type="range"]::-moz-range-thumb {
+  background: radial-gradient(circle at 34% 32%, #fff6de, var(--sun-2) 55%, var(--sun-4));
+  border: 2px solid #fff2d8;
+}
+
+/* option toggles read as a segmented control */
+.opt-toggle { gap: 5px; }
+.opt-toggle .btn-small {
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+/* ----------------------------------------------------------------------------
+   HUD — readability first. Position gets rank colour + change feedback, the
+   speed becomes a radial gauge, the lap chip gets pips.
+   -------------------------------------------------------------------------- */
+.chip {
+  background: linear-gradient(180deg, rgba(46, 27, 15, 0.9), rgba(20, 12, 7, 0.9));
+  border: 1px solid rgba(255, 186, 108, 0.22);
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.06) inset,
+    0 8px 22px rgba(0, 0, 0, 0.40);
+}
+
+.chip-pos {
+  position: relative;
+  min-width: 92px;
+  clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 100%, 0 100%);
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.07) inset,
+    inset 0 -3px 0 rgba(255, 122, 31, 0.75),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+.chip-pos[data-rank="1"] {
+  color: #fff7dd;
+  background: linear-gradient(180deg, rgba(146, 96, 18, 0.95), rgba(84, 50, 8, 0.95));
+  box-shadow:
+    0 2px 0 rgba(255, 244, 215, 0.16) inset,
+    inset 0 -3px 0 #ffd98a,
+    0 0 26px rgba(255, 200, 90, 0.45),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.chip-pos[data-rank="2"] {
+  background: linear-gradient(180deg, rgba(96, 100, 112, 0.95), rgba(52, 55, 66, 0.95));
+  box-shadow:
+    0 2px 0 rgba(240, 244, 255, 0.14) inset,
+    inset 0 -3px 0 #d4d9e8,
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.chip-pos[data-rank="3"] {
+  background: linear-gradient(180deg, rgba(130, 74, 40, 0.95), rgba(74, 40, 20, 0.95));
+  box-shadow:
+    0 2px 0 rgba(255, 220, 190, 0.14) inset,
+    inset 0 -3px 0 #e8a56a,
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.chip-pos.bump { animation: posBump 0.42s var(--ease-spring); }
+@keyframes posBump {
+  0% { transform: skewX(-6deg) scale(1); }
+  35% { transform: skewX(-6deg) scale(1.22); }
+  100% { transform: skewX(-6deg) scale(1); }
+}
+.chip-pos.pos-up { color: #b6ffd9; }
+.chip-pos.pos-down { color: #ffb9a8; }
+.reduce-fx .chip-pos.bump { animation: none; }
+
+/* speed: radial gauge */
+#speed-box {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 124px; height: 124px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 38%, rgba(52, 30, 16, 0.88), rgba(18, 10, 6, 0.92) 78%);
+  border: 1px solid rgba(255, 186, 108, 0.30);
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.07) inset,
+    0 12px 30px rgba(0, 0, 0, 0.45);
+}
+.speed-arc {
+  position: absolute; inset: 6px;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 218deg,
+      rgba(47, 216, 200, 0.0) 0deg,
+      var(--teal) calc(var(--petrol, 0) * 262deg),
+      rgba(255, 255, 255, 0.04) calc(var(--petrol, 0) * 262deg) 262deg,
+      transparent 262deg 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 62%, #000 64%);
+  mask: radial-gradient(circle, transparent 62%, #000 64%);
+  transform: rotate(0deg);
+  transition: filter 0.2s ease;
+}
+#speed-box.boosting .speed-arc { filter: drop-shadow(0 0 8px rgba(255, 182, 60, 0.8)); }
+.speed-read {
+  display: flex; flex-direction: column; align-items: baseline;
+  line-height: 1;
+}
+.speed-read #speed-val {
+  display: block;
+  min-width: 0;
+  font-size: 46px;
+  font-weight: 800;
+  font-style: italic;
+}
+.speed-read #speed-unit {
+  margin: 2px 0 0;
+  align-self: center;
+  font-size: 10px; letter-spacing: 2.4px;
+}
+
+@media (max-width: 640px) {
+  #speed-box { width: 84px; height: 84px; min-width: 0; padding: 0; }
+  .speed-read #speed-val { font-size: 30px; }
+  .speed-read #speed-unit { font-size: 8px; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  #speed-box { width: 58px; height: 58px; min-width: 0; padding: 0; border-radius: 50%; }
+  .speed-read #speed-val { font-size: 20px; }
+  .speed-read #speed-unit { display: none; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  #speed-box { width: 76px; height: 76px; min-width: 0; padding: 0; }
+  .speed-read #speed-val { font-size: 24px; }
+}
+
+/* boost meter: chunkier segments with tier glow */
+#boost-meter .seg { height: 17px; border-radius: 6px; }
+
+/* item slot: card with corner notches */
+#item-box {
+  border-radius: 14px;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+}
+
+/* ----------------------------------------------------------------------------
+   LIST ROWS — track select gets a number + theme accent.
+   -------------------------------------------------------------------------- */
+.list-row {
+  gap: 12px;
+  padding: 11px 16px;
+  border-left: 3px solid transparent;
+}
+.list-row.active, .list-row.selected {
+  border-left: 3px solid var(--teal);
+}
+.row-index {
+  flex: 0 0 30px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--row-accent, var(--sun-2));
+  text-shadow: 0 0 10px color-mix(in srgb, var(--row-accent, #ffb347) 60%, transparent);
+  opacity: 0.95;
+  font-variant-numeric: tabular-nums;
+}
+#track-list .list-row {
+  position: relative;
+}
+#track-list .list-row::before {
+  content: '';
+  width: 9px; height: 9px; flex: none;
+  margin-right: -2px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  background: var(--row-accent, var(--sun-2));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--row-accent, #ffb347) 70%, transparent);
+  opacity: 0.8;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+#track-list .list-row:hover::before,
+#track-list .list-row.active::before { transform: rotate(45deg) scale(1.35); opacity: 1; }
+#track-list .list-row .row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ----------------------------------------------------------------------------
+   ONLINE — calmer, matching the new depth.
+   -------------------------------------------------------------------------- */
+.online-lobby-row, .online-player-row, .online-players-pane, .online-chat-pane,
+.online-create, .online-join-id, .online-status {
+  box-shadow: 0 1px 0 rgba(255, 236, 205, 0.05) inset, 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+/* ----------------------------------------------------------------------------
+   SMALL SCREENS
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .settings-card { min-width: 0; }
+  .mode-hint { font-size: 10px; }
+}
+
+/* ----------------------------------------------------------------------------
+   MAIN MENU — speed-line backdrop + stronger hero presence.
+   Two ribbon layers slide past at different rates behind the command card,
+   like light trails along a night highway. Subtle by design and fully
+   disabled under Reduced Effects.
+   -------------------------------------------------------------------------- */
+.main-screen::after {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(115deg,
+      transparent 0 90px, rgba(255, 179, 71, 0.05) 90px 92px, transparent 92px 240px,
+      rgba(47, 216, 200, 0.04) 240px 242px, transparent 242px 420px);
+  background-size: 200% 200%;
+  animation: speedLines 26s linear infinite;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
+}
+@keyframes speedLines {
+  from { background-position: 0 0; }
+  to   { background-position: -1400px 0; }
+}
+.reduce-fx .main-screen::after { animation: none; opacity: 0.5; }
+
+/* version/signature chip, bottom-right of the main card */
+.main-menu-card::after {
+  content: '';
+}
+.loadout-panel {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.loadout-panel:hover {
+  border-color: rgba(255, 171, 84, 0.35);
+  box-shadow: var(--glow-sun), inset 0 1px rgba(255, 255, 255, 0.03);
+}
+
+/* ----------------------------------------------------------------------------
+   PAUSE — dimmer backdrop keeps the race visible but calmer.
+   -------------------------------------------------------------------------- */
+#screen-pause {
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255, 145, 54, 0.07), transparent 40%),
+    radial-gradient(ellipse at 50% 30%, rgba(40, 20, 8, 0.5), rgba(6, 3, 2, 0.82));
+}
+
+/* ----------------------------------------------------------------------------
+   RESULTS — headline gets a small trophy glyph when present.
+   -------------------------------------------------------------------------- */
+#results-headline { position: relative; }
+
+/* ----------------------------------------------------------------------------
+   TOASTS / NOTIFICATION legibility boost at a distance.
+   -------------------------------------------------------------------------- */
+#notify {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ----------------------------------------------------------------------------
+   GARAGE — tappable cells with clear selected state.
+   -------------------------------------------------------------------------- */
+.garage-cell {
+  position: relative;
+  border-radius: 13px;
+  transition: transform 0.12s var(--ease-out), border-color 0.16s ease,
+              box-shadow 0.16s ease, background 0.16s ease;
+}
+.garage-cell:hover { transform: translateY(-2px); }
+.garage-cell.selected {
+  border-color: #4ef0dd;
+  box-shadow: 0 0 0 1px rgba(47, 216, 200, 0.5), 0 0 22px rgba(47, 216, 200, 0.20),
+              0 8px 22px rgba(0, 0, 0, 0.3);
+}
+.garage-cell.selected::after {
+  content: '✓';
+  position: absolute; top: 5px; right: 8px;
+  font-size: 11px; font-weight: 800;
+  color: var(--teal-soft);
+  text-shadow: 0 0 8px rgba(47, 216, 200, 0.7);
+}
+.garage-cell.locked [aria-hidden] { filter: grayscale(1); }
+
+/* stat bars pulse faintly to feel alive */
+.stat-bar .stat-fill {
+  position: relative;
+}
+
+/* ----------------------------------------------------------------------------
+   TRACK PREVIEW — a framed "race passport" plate.
+   -------------------------------------------------------------------------- */
+.preview-pane {
+  background:
+    linear-gradient(180deg, rgba(255, 220, 170, 0.035), transparent 30%),
+    rgba(16, 9, 5, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 226, 187, 0.07),
+    0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.preview-stats span {
+  padding: 3px 10px;
+  background: rgba(255, 178, 96, 0.09);
+  border: 1px solid rgba(255, 178, 96, 0.14);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------------------
+   COUNTDOWN — backdrop disc for extra punch.
+   -------------------------------------------------------------------------- */
+#countdown { transform-origin: center; }
+
+/* ----------------------------------------------------------------------------
+   LAP CHIP — the final lap goes hot.
+   -------------------------------------------------------------------------- */
+#hud-lap[data-final="1"] {
+  color: #fff3dd;
+  background:
+    linear-gradient(180deg, rgba(150, 44, 20, 0.92), rgba(86, 22, 10, 0.92));
+  border-color: rgba(255, 160, 110, 0.5);
+  box-shadow:
+    0 2px 0 rgba(255, 236, 205, 0.08) inset,
+    inset 0 -3px 0 #ff7a1f,
+    0 0 22px rgba(255, 110, 40, 0.4),
+    0 8px 22px rgba(0, 0, 0, 0.4);
+}
+#hud-lap.final-pop { animation: lapPop 0.55s var(--ease-spring); }
+@keyframes lapPop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+.reduce-fx #hud-lap.final-pop { animation: none; }

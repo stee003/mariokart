@@ -15,6 +15,7 @@
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
 import { OBSTACLE_PROFILE, flameHazardRadius } from './track.js';
+import { buildGuardRails, buildArenaBarrier } from './guardRails.js';
 import { REFINEMENT_KITS, buildRefinedEnvironment } from './refinedEnvironment.js';
 import { EXPEDITION_KITS, buildExpeditionEnvironment } from './expeditionEnvironment.js';
 import { VERDANT_KIT, buildVerdantEnvironment } from './verdantEnvironment.js';
@@ -1616,6 +1617,10 @@ export function buildThemedEnvironment(scene, track, bannerName) {
   buildRoad(group, track, kit);
   buildFinishAndBanner(group, track, bannerName || 'SUNFORGE', kit);
   buildRampsAndPads(group, track, state);
+  // Track-edge protection: themed guard rails on circuits, a visible energy
+  // fence around battle arenas (exactly where the wall clamp lives)
+  if (track.def.arenaRadius !== undefined) buildArenaBarrier(group, track, theme, state);
+  else buildGuardRails(group, track, theme, state);
   if (!bespoke) buildTunnel(group, track, colliders, theme === 'ruins' ? 0xb3763f : theme === 'crystal' ? 0x3a3054 : theme === 'desert' ? 0x3a3238 : 0x565e6c, theme, state);
   if (!bespoke) buildCanyon(group, track, (kit.ground ?? 0x8a6f52) + 0x101010);
   buildObstacles(group, track, state);

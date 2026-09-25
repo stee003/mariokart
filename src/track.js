@@ -70,6 +70,40 @@ export const KART_HIT_BOTTOM = 0.15;
 export const KART_HIT_TOP = 1.35;
 
 // ---------------------------------------------------------------------------
+// Guard rails - track-edge safety barriers, generated for EVERY circuit from
+// its own geometry (see TrackManager._buildGuardRails). The same numbers feed
+// the collider (vehicle.js) and the visual builder (guardRails.js), so the
+// metal you see is exactly the wall that stops you.
+//
+//   offset       rail centreline sits this far beyond the road edge (half width)
+//   face         half-depth of the rail beam; the physical wall plane is at
+//                offset - face
+//   clearHeight  a kart higher than this above the road surface sails over
+//                the crown (ramp launches still work); any contact lower is a hit
+//   restitution  outward bounce given back on impact (absorbing barrier, < 1)
+// ---------------------------------------------------------------------------
+export const GUARD_RAIL = {
+  offset: 0.42,
+  face: 0.14,
+  clearHeight: 1.05,
+  restitution: 0.32,
+};
+
+// Placement tuning for _buildGuardRails (all in metres / rad-per-metre).
+// Elevation is measured against the lowest sample of the whole track.
+export const RAIL_LAYOUT = {
+  elevation: 3.4,     // deck this high above the track floor => rails both sides
+  curveSoft: 0.022,   // corner tight enough to rail its OUTER edge
+  curveHard: 0.056,   // corner tight enough to rail BOTH edges
+  curveLead: 11,      // samples of rail before/after a flagged corner sample
+  curveTrail: 8,
+  gapClose: 16,       // merge rail runs separated by less than this (samples)
+  minRun: 8,          // discard rail runs shorter than this (samples)
+  mouthPad: 7,        // metres of opening kept around a shortcut mouth
+  startPad: 7,        // metres kept clear around the start/finish line
+};
+
+// ---------------------------------------------------------------------------
 // Closest-point contact test between a kart cylinder and one collider.
 // Collider shapes (all carry a world-Y span):
 //   circle   { kind:'circle',  x, z, r,           y0, y1, hit }
@@ -135,6 +169,7 @@ export class TrackManager {
     this._buildShortcut();
     this._buildFeatures();
     this._buildRacingLine();
+    this._buildGuardRails();
   }
 
   get id() { return this.def.id; }
@@ -735,6 +770,107 @@ export class TrackManager {
     return slots;
   }
 
+  // ------------------------------------------------------------- guard rails
+  // Decide where this circuit gets safety rails, per centreline sample and
+  // side. The layout is derived from the track's own danger profile rather
+  // than sprayed everywhere:
+  //   * outside edge of hard corners (extended past entry/exit)
+  //   * both edges of very tight corners
+  //   * both edges of elevated decks (height above the track's lowest point)
+  //   * both edges of wind zones (storm ridges)
+  // Openings are carved back out for shortcut mouths, wide-sweeping moving
+  // obstacles and the start/finish straight, and the result is cleaned up
+  // into long, continuous, natural-looking runs (no fence confetti).
+  //
+  // Battle arenas keep their own circular energy wall instead, so they set
+  // `guardRails = null` here and skip all of this.
+  _buildGuardRails() {
+    if (this.def.arenaRadius !== undefined) {
+      this.guardRails = null;
+      return;
+    }
+    const n = this.n, L = this.L, T = RAIL_LAYOUT;
+    const left = new Uint8Array(n), right = new Uint8Array(n);
+    const minY = Math.min(...this.samples.map((p) => p.pos.y));
+    const mToI = (m) => this.sToIdx(((m % L) + L) % L);
+    const wrapLen = (s) => ((s % L) + L) % L;
+    const clearMetres = (arr, s0, len) => {
+      if (len <= 0) return;
+      const i0 = mToI(s0);
+      const count = Math.min(n, Math.ceil(len / this.sampleStep) + 1);
+      for (let k = 0; k <= count; k++) arr[(i0 + k) % n] = 0;
+    };
+
+    // ---- danger flags ------------------------------------------------------
+    for (let i = 0; i < n; i++) {
+      const c = this.line.curv[i];
+      const ac = Math.abs(c);
+      const rel = this.samples[i].pos.y - minY;
+      if (rel > T.elevation) { left[i] = 1; right[i] = 1; }
+      if (ac > T.curveHard) { left[i] = 1; right[i] = 1; }
+      else if (ac > T.curveSoft) {
+        // outside edge only: the side the kart gets thrown toward
+        const side = c > 0 ? right : left;
+        for (let k = -T.curveLead; k <= T.curveTrail; k++) side[(i + k + n) % n] = 1;
+      }
+    }
+    // storm ridges: crosswind belongs behind a barrier
+    for (const z of this.zones) {
+      if (z.type !== 'wind') continue;
+      const i0 = mToI(z.s0);
+      const count = Math.ceil(wrapLen(z.s1 - z.s0) / this.sampleStep) + 1;
+      for (let k = 0; k <= count; k++) { left[(i0 + k) % n] = 1; right[(i0 + k) % n] = 1; }
+    }
+
+    // ---- run cleanup --------------------------------------------------------
+    // Merge/balance BEFORE openings are carved: a carve shorter than the
+    // merge threshold would otherwise be bridged right back over.
+    for (const arr of [left, right]) cleanRailRuns(arr, T.gapClose, T.minRun);
+
+    // ---- openings ----------------------------------------------------------
+    const carve = (s0, len, side) => {
+      if (side >= 0) clearMetres(right, s0, len);
+      if (side <= 0) clearMetres(left, s0, len);
+    };
+    // shortcut mouth(s): leave the chute's side open end to end
+    if (this.shortcut) {
+      const sc = this.def.shortcut;
+      const side = (sc.latEntry + sc.latExit) >= 0 ? 1 : -1;
+      carve(this.shortcut.entryProg - T.mouthPad,
+        wrapLen(this.shortcut.exitProg - this.shortcut.entryProg) + T.mouthPad * 2, side);
+    }
+    // wide-sweeping obstacles cross the rail line; fencing it off looks (and
+    // plays) wrong, so open a gap around each
+    for (const o of this.obstacles) {
+      let centre = null, reach = 0;
+      if (o.type === 'gear') { centre = o.center; reach = o.armRadius + 3; }
+      else if (o.type === 'slider') { centre = o.base; reach = o.amp + 3; }
+      else if (o.type === 'pendulum') { centre = o.base; reach = 3 + (o.radius ?? 1.5); }
+      if (!centre) continue;
+      const idx = this._nearest(centre, this.samples, -1, 0).idx;
+      const centreS = ((this.samples[idx].s % L) + L) % L;
+      carve(centreS - reach, reach * 2, 0);   // both sides
+    }
+    // start/finish straight stays open for the grid and the finish cinematic
+    carve(-T.startPad, T.startPad * 2 + 1, 0);
+
+    // a carve can strand a tiny stub of rail next to the opening; drop those
+    for (const arr of [left, right]) cleanRailRuns(arr, 0, T.minRun);
+
+    let count = 0;
+    for (let i = 0; i < n; i++) count += left[i] + right[i];
+    this.guardRails = { left, right, count };
+  }
+
+  // Is there a rail on `side` (+1 = right of travel, -1 = left) at `progress`?
+  // Battle arenas answer false (their wall is enforceArenaWalls).
+  hasRailAt(progress, side) {
+    const g = this.guardRails;
+    if (!g || !g.count) return false;
+    const i = this.sToIdx(progress);
+    return (side >= 0 ? g.right[i] : g.left[i]) === 1;
+  }
+
   // ------------------------------------------------------------------ racing line
   _buildRacingLine() {
     const n = this.n, step = this.step;
@@ -807,3 +943,48 @@ const HEIGHT_SAT2 = 9.0;   // ~3 m
 const SHORTCUT_END_SLACK = 6.0;
 const SHORTCUT_DECK_BAND = 4.0;
 const SHORTCUT_HYSTERESIS = 1.5;   // metres of stickiness once engaged
+
+// ---------------------------------------------------------------------------
+// Turn raw per-sample rail flags into a clean run layout, in place on one
+// circular Uint8Array: close gaps shorter than `gapClose` between rails, then
+// drop rail runs shorter than `minRun`. Works on a run-length encoding so the
+// wrap-around at the start/finish sample is handled naturally.
+// ---------------------------------------------------------------------------
+function cleanRailRuns(arr, gapClose, minRun) {
+  const n = arr.length;
+  let ones = 0;
+  for (let i = 0; i < n; i++) ones += arr[i];
+  if (ones === 0 || ones === n) return;
+
+  // Find a 1->0 boundary to start the encoding on, so runs alternate
+  // 0,1,0,1... around the wrap with no adjacent runs sharing a value.
+  let start = -1;
+  for (let i = 0; i < n; i++) {
+    if (arr[i] === 0 && arr[(i - 1 + n) % n] === 1) { start = i; break; }
+  }
+  if (start < 0) return;   // unreachable given the early outs, but stay safe
+
+  const runs = [];   // alternating {start, len, val}, val starts at 0
+  let val = 0, segStart = start;
+  for (let k = 1; k <= n; k++) {
+    const i = (start + k) % n;
+    if (arr[i] !== val) {
+      runs.push({ start: segStart, len: (i - segStart + n) % n, val });
+      segStart = i;
+      val = arr[i];
+    }
+  }
+
+  // merge: short 0-runs become rail (they are just brief fence openings).
+  // Bridges are tagged so the dissolve pass below never re-opens them.
+  for (const run of runs) if (run.val === 0 && run.len < gapClose) { run.val = 1; run.bridged = true; }
+  // dissolve: leftover short rail runs read as clutter, not protection
+  for (const run of runs) if (run.val === 1 && run.len < minRun && !run.bridged) run.val = 0;
+
+  // restamp the circular array
+  arr.fill(0);
+  for (const run of runs) {
+    if (run.val !== 1) continue;
+    for (let k = 0; k < run.len; k++) arr[(run.start + k) % n] = 1;
+  }
+}

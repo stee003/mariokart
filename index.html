@@ -69,8 +69,11 @@
           </div>
         </div>
         <div id="speed-box" aria-label="Speed">
-          <span id="speed-val">0</span>
-          <span id="speed-unit">km/h</span>
+          <span class="speed-arc" aria-hidden="true"></span>
+          <span class="speed-read">
+            <span id="speed-val">0</span>
+            <span id="speed-unit">km/h</span>
+          </span>
         </div>
       </div>
     </div>
@@ -182,8 +185,10 @@
 
     <!-- ===================== SETTINGS ===================== -->
     <div id="screen-settings" class="screen hidden">
-      <div class="menu-card scrollable-card">
+      <div class="menu-card scrollable-card settings-card">
         <h2 data-i18n="settings.title">Settings</h2>
+
+        <div class="settings-section" data-i18n="settings.section.general">General</div>
         <div class="setting-row">
           <label data-i18n="settings.language">Language</label>
           <div class="lang-toggle">
@@ -191,16 +196,8 @@
             <button class="btn btn-small" id="lang-it">Italiano</button>
           </div>
         </div>
-        <div class="setting-row setting-column">
-          <label data-i18n="settings.controls">Controls</label>
-          <div class="opt-toggle" id="control-mode-list"></div>
-          <div class="setting-note" id="gamepad-status" role="status" aria-live="polite"></div>
-          <div class="setting-note" data-i18n="settings.gamepadHint">Standard Bluetooth controllers are supported.</div>
-        </div>
-        <div class="setting-row setting-column">
-          <label data-i18n="settings.touchLayout">Touch layout</label>
-          <div class="opt-toggle" id="touch-layout-list"></div>
-        </div>
+
+        <div class="settings-section" data-i18n="settings.section.display">Display &amp; Camera</div>
         <div class="setting-row">
           <label data-i18n="settings.fullscreen">Fullscreen</label>
           <button class="btn btn-small" id="btn-fullscreen" data-i18n="display.fullscreen">Enter fullscreen</button>
@@ -215,6 +212,12 @@
           <input type="range" id="cam-height" min="2.2" max="6" step="0.1" aria-label="Camera height" />
         </div>
         <div class="setting-row">
+          <label data-i18n="settings.uiScale">UI scale</label>
+          <div class="opt-toggle" id="uiscale-list"></div>
+        </div>
+
+        <div class="settings-section" data-i18n="settings.section.audio">Audio</div>
+        <div class="setting-row">
           <label data-i18n="settings.volume">Volume</label>
           <input type="range" id="volume" min="0" max="1" step="0.05" aria-label="Volume" />
         </div>
@@ -226,6 +229,8 @@
           <label data-i18n="settings.music">Music volume</label>
           <input type="range" id="music-volume" min="0" max="1" step="0.05" aria-label="Music volume" />
         </div>
+
+        <div class="settings-section" data-i18n="settings.section.race">Race Setup</div>
         <div class="setting-row">
           <label data-i18n="settings.difficulty">AI difficulty</label>
           <div class="opt-toggle" id="difficulty-list"></div>
@@ -245,10 +250,28 @@
             <button class="btn btn-small" id="items-off" data-i18n="settings.off">Off</button>
           </div>
         </div>
-        <div class="setting-row">
-          <label data-i18n="settings.uiScale">UI scale</label>
-          <div class="opt-toggle" id="uiscale-list"></div>
+
+        <div class="settings-section" data-i18n="settings.section.controls">Controls</div>
+        <div class="setting-row setting-column">
+          <label data-i18n="settings.controls">Controls</label>
+          <div class="opt-toggle" id="control-mode-list"></div>
+          <div class="setting-note" id="gamepad-status" role="status" aria-live="polite"></div>
+          <div class="setting-note" data-i18n="settings.gamepadHint">Standard Bluetooth controllers are supported.</div>
         </div>
+        <div class="setting-row setting-column">
+          <label data-i18n="settings.touchLayout">Touch layout</label>
+          <div class="opt-toggle" id="touch-layout-list"></div>
+        </div>
+        <div class="setting-row setting-column">
+          <label data-i18n="settings.keys">Key bindings</label>
+          <div id="keys-list" class="keys-list"></div>
+          <div class="setting-inline">
+            <span id="keys-status"></span>
+            <button class="btn btn-small" id="btn-keys-reset" data-i18n="settings.resetKeys">Reset bindings</button>
+          </div>
+        </div>
+
+        <div class="settings-section" data-i18n="settings.section.access">Accessibility &amp; HUD</div>
         <div class="setting-row">
           <label data-i18n="settings.reduceFx">Reduced effects</label>
           <div class="lang-toggle">
@@ -268,14 +291,6 @@
           <div class="lang-toggle">
             <button class="btn btn-small" id="minimap-on" data-i18n="settings.on">On</button>
             <button class="btn btn-small" id="minimap-off" data-i18n="settings.off">Off</button>
-          </div>
-        </div>
-        <div class="setting-row setting-column">
-          <label data-i18n="settings.keys">Key bindings</label>
-          <div id="keys-list" class="keys-list"></div>
-          <div class="setting-inline">
-            <span id="keys-status"></span>
-            <button class="btn btn-small" id="btn-keys-reset" data-i18n="settings.resetKeys">Reset bindings</button>
           </div>
         </div>
         <button class="btn" id="btn-settings-back" data-i18n="settings.back" data-nav-back>Back</button>
@@ -313,15 +328,50 @@
 
     <!-- ===================== MODE SELECT ===================== -->
     <div id="screen-mode" class="screen hidden">
-      <div class="menu-card">
+      <div class="menu-card mode-card-panel">
         <h2 data-i18n="menu.mode">Choose Game Mode</h2>
-        <div class="menu-buttons mode-buttons">
-          <button class="btn btn-primary" id="btn-mode-quick" data-i18n="menu.quick" data-nav-default>Quick Race</button>
-          <button class="btn btn-primary" id="btn-mode-gp" data-i18n="menu.grandprix">Grand Prix</button>
-          <button class="btn btn-primary" id="btn-mode-tt" data-i18n="menu.timetrial">Time Trial</button>
-          <button class="btn btn-primary" id="btn-mode-battle" data-i18n="menu.battle">Battle Mode</button>
-          <button class="btn btn-primary online-btn" id="btn-mode-online" data-i18n="online.title">Online Multiplayer</button>
-          <button class="btn" id="btn-mode-back" data-i18n="menu.back" data-nav-back>Back</button>
+        <div class="menu-buttons mode-buttons mode-grid">
+          <button class="btn btn-primary mode-card" id="btn-mode-quick" data-nav-default>
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21V4m0 1h13l-2.5 4L17 13H4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+            <span class="mode-copy">
+              <span class="mode-title" data-i18n="menu.quick">Quick Race</span>
+              <span class="mode-hint" data-i18n="menu.quickHint">One race, your rules</span>
+            </span>
+            <span class="mode-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn btn-primary mode-card" id="btn-mode-gp">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4h10v5a5 5 0 0 1-10 0V4zM7 5H4v2a3 3 0 0 0 3 3m10-5h3v2a3 3 0 0 1-3 3m-5 4v3m-4 3h8m-8 0h8l-1-3H9l-1 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+            <span class="mode-copy">
+              <span class="mode-title" data-i18n="menu.grandprix">Grand Prix</span>
+              <span class="mode-hint" data-i18n="menu.gpHint">Four-track cup, points decide</span>
+            </span>
+            <span class="mode-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn btn-primary mode-card" id="btn-mode-tt">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM10 2h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            <span class="mode-copy">
+              <span class="mode-title" data-i18n="menu.timetrial">Time Trial</span>
+              <span class="mode-hint" data-i18n="menu.ttHint">Chase the clock, beat the ghost</span>
+            </span>
+            <span class="mode-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn btn-primary mode-card" id="btn-mode-battle">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a5.5 5.5 0 0 1 5.5 5.5c0 2.3-1 3.7-2 4.8l-1 1.2h-5l-1-1.2c-1-1.1-2-2.5-2-4.8A5.5 5.5 0 0 1 12 3zM9.8 17.5h4.4M12 17.5V21m-3-2.1 1.2 1.2m5-1.2-1.2 1.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="mode-copy">
+              <span class="mode-title" data-i18n="menu.battle">Battle Mode</span>
+              <span class="mode-hint" data-i18n="menu.battleHint">Arena combat, last one floating</span>
+            </span>
+            <span class="mode-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn btn-primary mode-card online-btn" id="btn-mode-online">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm-9-9h18M12 3c2.5 2.4 3.8 5.6 3.8 9s-1.3 6.6-3.8 9c-2.5-2.4-3.8-5.6-3.8-9S9.5 5.4 12 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="mode-copy">
+              <span class="mode-title" data-i18n="online.title">Online Multiplayer</span>
+              <span class="mode-hint" data-i18n="menu.onlineHint">Race friends around the world</span>
+            </span>
+            <span class="mode-arrow" aria-hidden="true">›</span>
+          </button>
+          <button class="btn mode-back" id="btn-mode-back" data-i18n="menu.back" data-nav-back>Back</button>
         </div>
       </div>
     </div>
