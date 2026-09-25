@@ -323,6 +323,7 @@ export class HUDManager {
       boostLabel: document.getElementById('boost-label'),
       boostMeter: document.getElementById('boost-meter'),
       segs: [...document.querySelectorAll('#boost-meter .seg .fill')],
+      speedBox: document.getElementById('speed-box'),
       speedVal: document.getElementById('speed-val'),
       speedUnit: document.getElementById('speed-unit'),
       resultsHeadline: document.getElementById('results-headline'),
@@ -413,18 +414,39 @@ export class HUDManager {
     const v = player.vehicle;
     const st = race.kartState.get(v);
 
-    // position
+    // position: rank-coloured chip + a bump animation (and a brief green/red
+    // tint) whenever the standing changes
     const pos = race.playerStanding();
     if (pos !== this._lastPos) {
+      const wasPos = this._lastPos;
       this._lastPos = pos;
       this.el.pos.textContent = this.ordinal(pos);
+      this.el.pos.dataset.rank = String(pos);
+      if (wasPos > 0 && race.raceTime > 0.1) {
+        const el = this.el.pos;
+        el.classList.remove('bump');
+        void el.offsetWidth;
+        el.classList.add('bump');
+        el.classList.toggle('pos-up', pos < wasPos);
+        el.classList.toggle('pos-down', pos > wasPos);
+        clearTimeout(this._posTintT);
+        this._posTintT = setTimeout(() => el.classList.remove('pos-up', 'pos-down'), 620);
+      } else {
+        this.el.pos.classList.remove('pos-up', 'pos-down');
+      }
     }
 
-    // lap
+    // lap: flash + hot styling when the final lap starts
     const lapShown = Math.min(st.lap + 1, st.laps);
     if (lapShown !== this._lastLap) {
       this._lastLap = lapShown;
       this.el.lap.textContent = this.i18n.t('hud.lapFormat', { lap: lapShown, total: st.laps });
+      this.el.lap.dataset.final = lapShown === st.laps ? '1' : '0';
+      if (lapShown === st.laps && st.laps > 1) {
+        this.el.lap.classList.remove('final-pop');
+        void this.el.lap.offsetWidth;
+        this.el.lap.classList.add('final-pop');
+      }
     }
 
     // timer (cheap DOM write only when the rendered string changes)
@@ -434,12 +456,14 @@ export class HUDManager {
       this.el.time.textContent = timeStr;
     }
 
-    // speed
+    // speed: digital readout + the radial gauge fill (0..140 km/h range)
     const kmh = Math.round(v.speedKmh);
     if (kmh !== this._lastSpeed) {
       this._lastSpeed = kmh;
       this.el.speedVal.textContent = String(kmh);
+      this.el.speedBox?.style?.setProperty?.('--petrol', Math.max(0, Math.min(1, kmh / 150)).toFixed(3));
     }
+    this.el.speedBox?.classList?.toggle?.('boosting', v.boost.boosting);
 
     // boost meter
     const levels = CONFIG.drift.levels;

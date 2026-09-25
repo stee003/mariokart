@@ -23,6 +23,7 @@
 import * as THREE from '../lib/three.module.js';
 import { createRampVisual } from './terrainMesh.js';
 import { OBSTACLE_PROFILE } from './track.js';
+import { buildGuardRails } from './guardRails.js';
 
 const SANDSTONES = [0xc9834e, 0xb97a45, 0xd99a5b, 0xa86f3e, 0xd18c50];
 const DUNES = [0xe0b070, 0xd8a868, 0xdcab78, 0xe6bc84, 0xcfa060];
@@ -281,6 +282,10 @@ export function buildEnvironment(scene, track) {
   finMesh.rotation.z = yawFor(fin.dir);
   finMesh.position.copy(fin.pos).setY(fin.pos.y + 0.05);
   group.add(finMesh);
+
+  // track-edge protection: desert-style guard rails on the circuit's
+  // danger profile (corners, elevated decks); collides exactly as drawn
+  buildGuardRails(group, track, 'desert', state);
 
   // start gate: tapered pillars + lintel with a carved gear emblem
   const gateStone = new THREE.MeshStandardMaterial({ color: 0x9c6b3c, roughness: 0.95, flatShading: true });

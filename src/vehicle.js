@@ -7,6 +7,7 @@
 
 import * as THREE from '../lib/three.module.js';
 import { CONFIG } from './config.js';
+import { GUARD_RAIL } from './track.js';
 import { DriftSystem } from './drift.js';
 import { BoostSystem } from './boost.js';
 import { waterCoverage } from './water.js';
@@ -57,6 +58,7 @@ export class VehicleController {
     this.airTime = 0;
     this.climbRate = 0;
     this.lastFallSpeed = 0;
+    this._railFxT = 0;                  // guard-rail FX cooldown
 
     // Terrain attitude, resolved into the KART's frame (not the road's) so
     // the chassis and the pilot lean with the actual slope they are on.
@@ -110,6 +112,7 @@ export class VehicleController {
     this.airTime = 0;
     this.climbRate = 0;
     this.lastFallSpeed = 0;
+    this._railFxT = 0;
     // clear the terrain attitude so a respawn never inherits the pose the
     // kart had when it fell off the track
     this.terrainPitch = 0;
@@ -325,6 +328,7 @@ export class VehicleController {
     this.pos.y = this.y;
     const surf = track.surface(this.pos, this.hint, this.vel);
     this.surf = surf;
+    this._resolveGuardRail(surf, dt);
     const Rcfg = CONFIG.recovery;
     const lateralBeyond = Math.abs(surf.lateral) - surf.width / 2;
     // surface() projects the nearest road height even metres past its edge.
@@ -533,6 +537,55 @@ export class VehicleController {
       if (this.stuckTimer > Rcfg.stuckTime) { this.doReset('stuck'); return; }
     } else {
       this.stuckTimer = 0;
+    }
+  }
+
+  // -------------------------------------------------------- guard rails
+  // Track-edge barrier contact. The rail line is generated per sample by
+  // TrackManager (layout in track.js, drawn in guardRails.js), so this check
+  // is a cheap lateral query against the SAME wall the player sees. It acts
+  // like the obstacle walls: clamp the kart back inside and reflect the
+  // outward velocity component with a soft, absorbing restitution.
+  //
+  // Skipped for: karts flying higher than the rail crown (ramp launches stay
+  // legitimate), karts on the shortcut chute (no rails there), recoveries,
+  // and battle arenas (enforceArenaWalls owns those edges instead).
+  _resolveGuardRail(surf, dt) {
+    const track = this.track;
+    if (!track.guardRails || surf.useShortcut) return;
+    if (this.resetTimer > 0 || this.respawnPending > 0 || this.fx?.recovering) return;
+    // above the crown of the rail? then it can be cleared like a low wall
+    if (this.y - surf.y > GUARD_RAIL.clearHeight) return;
+
+    const r = this.params.collisionRadius ?? CONFIG.vehicle.collisionRadius;
+    const halfW = surf.width / 2;
+    const lat = surf.lateral;
+    const side = lat >= 0 ? 1 : -1;
+    if (!track.hasRailAt(surf.progress, side)) return;
+
+    // physical wall plane: inner face of the beam drawn by guardRails.js
+    const limit = halfW + GUARD_RAIL.offset - GUARD_RAIL.face - r;
+    const over = Math.abs(lat) - limit;
+    if (over <= 0) return;
+
+    this.pos.addScaledVector(surf.right, -side * over);
+    // keep the surface snapshot coherent: everything downstream this step
+    // (recovery thresholds, safe-anchor tracking) sees the clamped position
+    surf.lateral = side * limit;
+
+    const vn = this.vel.dot(surf.right) * side;   // > 0 means leaving the road
+    if (vn <= 0) return;                          // sliding back in: just clamp
+    this.vel.addScaledVector(surf.right, -side * vn * (1 + GUARD_RAIL.restitution));
+    if (vn > 1.5) {
+      // barrier absorbtion: scrub a little forward speed on real impacts
+      this.vel.multiplyScalar(1 - Math.min(0.12, vn * 0.006));
+    }
+    this._railFxT = Math.max(0, (this._railFxT || 0) - dt);
+    if (vn > 2.2 && this._railFxT <= 0) {
+      this.fx.railHit = Math.min(14, vn);
+      this._railHitNx = -side * surf.right.x;   // contact normal for FX
+      this._railHitNz = -side * surf.right.z;
+      this._railFxT = 0.16;
     }
   }
 

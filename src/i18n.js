@@ -29,6 +29,12 @@ const BASE_STRINGS = {
 
   'settings.title':    { en: 'Settings',                            it: 'Impostazioni' },
   'settings.language': { en: 'Language',                            it: 'Lingua' },
+  'settings.section.general':     { en: 'General',                  it: 'Generali' },
+  'settings.section.display':     { en: 'Display & Camera',         it: 'Schermo e camera' },
+  'settings.section.audio':       { en: 'Audio',                    it: 'Audio' },
+  'settings.section.race':        { en: 'Race Setup',               it: 'Gara' },
+  'settings.section.controls':    { en: 'Controls',                 it: 'Comandi' },
+  'settings.section.access':      { en: 'Accessibility & HUD',      it: 'Accessibilit\u00e0 e HUD' },
   'settings.controls': { en: 'Control preference',                   it: 'Preferenza comandi' },
   'settings.control.auto': { en: 'Auto',                             it: 'Automatico' },
   'settings.control.touch': { en: 'Touch',                           it: 'Touch' },
